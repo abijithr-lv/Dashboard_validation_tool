@@ -57,6 +57,10 @@ def _scalar(spark, sql: str) -> Any:
 
 
 def _pct_gap(expected: float, actual: float) -> float:
+    # Spark returns DECIMAL columns (e.g. spend) as decimal.Decimal, which can't
+    # be mixed with float in arithmetic — normalize both to float up front.
+    expected = float(expected)
+    actual = float(actual)
     if expected == 0:
         return 100.0 if actual != 0 else 0.0
     return abs(actual - expected) / abs(expected) * 100.0
