@@ -54,12 +54,40 @@ def _build_log_rows(run_result: Dict) -> List[Dict]:
 
 def log_run(spark, run_result: Dict, log_table: str) -> None:
     """Append this run's check results to log_table (auto-created on first write)."""
+    # Imported here, not at module level, so this module stays importable in
+    # test_local.py without pyspark installed (pyspark is Databricks-only).
+    from pyspark.sql.types import DoubleType, StringType, StructField, StructType
+
     rows = _build_log_rows(run_result)
     if not rows:
         print("[audit_log] No check results to log — skipping")
         return
 
-    df = spark.createDataFrame(rows)
+    # Explicit schema — required because columns like `severity` (None on
+    # every row of an all-PASS run) and `gap`/`tolerance` (None for
+    # freshness and completeness checks) can be null across an entire
+    # batch. Spark's createDataFrame() infers types by sampling the data
+    # and raises CANNOT_DETERMINE_TYPE when a column is null in every
+    # sampled row, which happens on the most common case: a clean PASS run.
+    log_schema = StructType([
+        StructField("run_id",          StringType(), True),
+        StructField("dashboard",       StringType(), True),
+        StructField("run_week",        StringType(), True),
+        StructField("run_timestamp",   StringType(), True),
+        StructField("overall_status",  StringType(), True),
+        StructField("check_name",      StringType(), True),
+        StructField("metric",          StringType(), True),
+        StructField("status",          StringType(), True),
+        StructField("severity",        StringType(), True),
+        StructField("expected",        StringType(), True),
+        StructField("actual",          StringType(), True),
+        StructField("gap",             DoubleType(), True),
+        StructField("tolerance",       DoubleType(), True),
+        StructField("detail",          StringType(), True),
+        StructField("triage_analysis", StringType(), True),
+    ])
+
+    df = spark.createDataFrame(rows, schema=log_schema)
     (
         df.write
           .format("delta")
