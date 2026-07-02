@@ -4,9 +4,10 @@ Local test — no Spark, no Databricks needed.
 Tests:
   1. YAML registry loads and has required keys
   2. CheckResult dataclass works correctly
-  3. Reporter builds correct Slack messages (PASS and FAIL)
+  3. Report module builds correct Slack messages (PASS and FAIL)
   4. Triage prompt builder produces a non-empty prompt
   5. All imports resolve without error
+  6. Audit log module flattens a run into one log row per CheckResult
 
 Run from the repo root:
     cd dashboard_validation_framework
@@ -20,7 +21,7 @@ sys.stdout.reconfigure(encoding='utf-8')
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "engine"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "triage"))
 
-REGISTRY_PATH = os.path.join(os.path.dirname(__file__), "registry", "social_hub_consolidated_dashboard.yaml")
+REGISTRY_PATH = os.path.join(os.path.dirname(__file__), "registry", "example_dashboard.yaml")
 
 PASS  = "\033[92m  PASS\033[0m"
 FAIL  = "\033[91m  FAIL\033[0m"
@@ -44,11 +45,11 @@ print("═" * 60 + "\n")
 # ── Test 1: imports ──────────────────────────────────────────────────────────
 def t_imports():
     import yaml
-    from checks import CheckResult, Status
-    from reporter import build_slack_message, print_console_report
-    from triage_agent import _build_prompt
+    from quality_checks import CheckResult, Status
+    from report import build_slack_message, print_console_report
+    from agent import _build_prompt
 
-check("All imports resolve (checks, reporter, triage_agent, yaml)", t_imports)
+check("All imports resolve (quality_checks, orchestrator, report, agent, yaml)", t_imports)
 
 # ── Test 2: YAML loads ───────────────────────────────────────────────────────
 def t_yaml_loads():
@@ -79,7 +80,7 @@ check("All YAML metrics have name, tolerance_pct, checks", t_yaml_metrics)
 
 # ── Test 4: CheckResult dataclass ────────────────────────────────────────────
 def t_check_result():
-    from checks import CheckResult, Status
+    from quality_checks import CheckResult, Status
     r = CheckResult(
         check_name="reconciliation",
         metric="impressions",
@@ -101,8 +102,8 @@ check("CheckResult: PASS/DRIFT/FAIL statuses and severity labels", t_check_resul
 
 # ── Test 5: Reporter — PASS message ─────────────────────────────────────────
 def t_reporter_pass():
-    from checks import CheckResult, Status
-    from reporter import build_slack_message
+    from quality_checks import CheckResult, Status
+    from report import build_slack_message
 
     run_result = {
         "dashboard":      "test_dashboard",
@@ -127,8 +128,8 @@ check("Reporter builds correct PASS Slack message", t_reporter_pass)
 
 # ── Test 6: Reporter — FAIL message ─────────────────────────────────────────
 def t_reporter_fail():
-    from checks import CheckResult, Status
-    from reporter import build_slack_message
+    from quality_checks import CheckResult, Status
+    from report import build_slack_message
 
     run_result = {
         "dashboard":      "test_dashboard",
@@ -160,8 +161,8 @@ check("Reporter builds correct FAIL Slack message with triage text", t_reporter_
 
 # ── Test 7: Console report prints without error ──────────────────────────────
 def t_console_report():
-    from checks import CheckResult, Status
-    from reporter import print_console_report
+    from quality_checks import CheckResult, Status
+    from report import print_console_report
     import io, contextlib
 
     run_result = {
@@ -189,11 +190,11 @@ check("Console report prints PASS/FAIL breakdown and triage text", t_console_rep
 
 # ── Test 8: Triage prompt builder ────────────────────────────────────────────
 def t_triage_prompt():
-    from checks import CheckResult, Status
-    from triage_agent import _build_prompt
+    from quality_checks import CheckResult, Status
+    from agent import _build_prompt
 
     run_result = {
-        "dashboard": "social_hub_consolidated_dashboard",
+        "dashboard": "example_dashboard",
         "run_week":  "2026-23",
         "results": [
             CheckResult("reconciliation", "impressions", Status.FAIL, 1_000_000, 850_000,
@@ -202,7 +203,7 @@ def t_triage_prompt():
         "overall_status": Status.FAIL,
     }
     prompt = _build_prompt(run_result)
-    assert "social_hub_consolidated_dashboard" in prompt
+    assert "example_dashboard" in prompt
     assert "2026-23" in prompt
     assert "impressions" in prompt
     assert len(prompt) > 200, "Prompt too short"
@@ -219,14 +220,44 @@ def t_engine_yaml_load():
     assert path.exists(), f"Registry file not found: {REGISTRY_PATH}"
     with open(path) as f:
         reg = yaml.safe_load(f)
-    assert reg["dashboard"] == "social_hub_consolidated_dashboard"
-    assert reg["dashboard_table"].startswith("socialmedia.")
-    assert reg["source_table"].startswith("socialmedia.")
+    assert reg["dashboard"] == "example_dashboard"
+    assert "." in reg["dashboard_table"], "dashboard_table should be catalog/schema-qualified"
+    assert "." in reg["source_table"], "source_table should be catalog/schema-qualified"
     print(f"         Dashboard table : {reg['dashboard_table']}")
     print(f"         Source table    : {reg['source_table']}")
     print(f"         Metrics         : {[m['name'] for m in reg['metrics']]}")
 
 check("ValidationEngine: YAML parses correctly with correct table names", t_engine_yaml_load)
+
+# ── Test 10: History — flattens a run into one row per CheckResult (no Spark) ──
+def t_history_rows():
+    from quality_checks import CheckResult, Status
+    from audit_log import _build_log_rows
+
+    run_result = {
+        "dashboard":      "test_dashboard",
+        "run_week":       "2026-23",
+        "run_timestamp":  "2026-07-01T06:00:00",
+        "overall_status": Status.FAIL,
+        "results": [
+            CheckResult("freshness",      "row_freshness", Status.PASS, "2026-23", "2026-23"),
+            CheckResult("reconciliation", "impressions",   Status.FAIL, 1_000_000, 850_000,
+                        gap=-150_000, tolerance=1.0, detail="Gap: 15.0%"),
+        ],
+        "triage_analysis": "Root cause: missing partition.",
+    }
+    rows = _build_log_rows(run_result)
+    assert len(rows) == 2, f"Expected 2 rows, got {len(rows)}"
+    assert all(r["dashboard"] == "test_dashboard" for r in rows), "dashboard not repeated on every row"
+    assert all(r["run_week"] == "2026-23" for r in rows)
+    assert all(r["triage_analysis"] == "Root cause: missing partition." for r in rows)
+    assert rows[0]["status"] == "PASS" and rows[0]["severity"] is None
+    assert rows[1]["status"] == "FAIL" and rows[1]["severity"] == "P2"
+    assert rows[1]["expected"] == "1000000" and rows[1]["actual"] == "850000"
+    assert rows[0]["run_id"] == rows[1]["run_id"], "same run must share one run_id"
+    print(f"         Row keys: {sorted(rows[0].keys())}")
+
+check("Audit log flattens a run into one log row per CheckResult", t_history_rows)
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 passed = sum(results)

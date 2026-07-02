@@ -1,0 +1,64 @@
+# Dashboard Registry — Template
+# -----------------------------------------------------------
+# Copy this file to registry/<your_dashboard_name>.yaml and replace every
+# placeholder value below with your own table names, metrics, and dimensions.
+# This file is not tied to any real dashboard — nothing here is a live table.
+#
+# Easiest path: run /onboard-dashboard in Claude Code and let it generate a
+# filled-in version of this from a screenshot. See README.md and
+# QUICKSTART.md for the full manual walkthrough.
+# -----------------------------------------------------------
+
+dashboard: example_dashboard
+description: >
+  One-line description of what this dashboard shows and who uses it.
+
+dashboard_table: <catalog>.<schema>.<dashboard_table>
+source_table:    <catalog>.<schema>.<source_table>
+date_column:     <date_column>            # e.g. fiscal_yr_and_wk_desc, report_date
+date_format:     "<YYYY-WW or YYYY-MM-DD>"
+
+# row_filter: "<optional: e.g. data_type != 'Budget'>"   # uncomment if needed
+
+# ── Metrics ─────────────────────────────────────────────────────────────────
+# tolerance_pct : max acceptable gap between dashboard value and source value.
+# checks        : which check types to run for this metric.
+#   reconciliation — dashboard total ≈ source total
+#   trend_sanity   — week-over-week change within bounds
+# ─────────────────────────────────────────────────────────────────────────────
+metrics:
+
+  - name: <metric_column>
+    tolerance_pct: 1.0
+    checks: [reconciliation, trend_sanity]
+
+# ── Dimensions ──────────────────────────────────────────────────────────────
+# completeness_check : verify all expected_values appear each week.
+# expected_values    : the full set of dimension values the dashboard must have.
+#                      Missing values → DRIFT (1 missing) or FAIL (2+).
+# ─────────────────────────────────────────────────────────────────────────────
+dimensions:
+
+  - name: <dimension_column>
+    completeness_check: false   # set true once expected_values is confirmed complete
+    expected_values: []
+
+# ── Check Configuration ─────────────────────────────────────────────────────
+checks:
+
+  freshness:
+    enabled: true
+
+  reconciliation:
+    enabled: true
+
+  parts_sum:
+    enabled: true
+    pivot_column: <dimension_column>
+
+  trend_sanity:
+    enabled: true
+    max_wow_change_pct: 50.0
+
+  completeness:
+    enabled: true

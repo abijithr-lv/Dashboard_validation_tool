@@ -6,6 +6,9 @@ A human-approved, AI-assisted validation engine that runs before every
 dashboard refresh. Claude learns what to check once; a deterministic
 Databricks job carries every week.
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the exact cell-by-cell execution
+flow — which file calls which, in what order.
+
 ---
 
 ## How it works
@@ -32,15 +35,18 @@ dashboard_validation_framework/
 ├── registry/
 │   └── <dashboard_name>.yaml       # one file per dashboard (human-approved)
 ├── engine/
-│   ├── checks.py                   # 5 check types (freshness, reconciliation, …)
-│   ├── validation_engine.py        # reads YAML, orchestrates checks
-│   ├── reporter.py                 # Slack Block Kit + console output
+│   ├── quality_checks.py           # 5 check types (freshness, reconciliation, …)
+│   ├── orchestrator.py             # reads YAML, orchestrates checks (ValidationEngine)
+│   ├── report.py                   # Slack Block Kit + console output
+│   ├── audit_log.py                # appends every run's results to a Delta log table
 │   └── validator.ipynb             # Databricks entry point — schedule this
 ├── triage/
-│   └── triage_agent.py             # calls Claude API on FAIL to explain why
+│   └── agent.py                    # calls Claude API on FAIL to explain why
+├── .claude/commands/
+│   └── onboard-dashboard.md        # Claude Code slash-command skill (single copy)
 ├── onboarding/
-│   ├── ONBOARD_NEW_DASHBOARD.md    # step-by-step onboarding guide
-│   └── onboard-dashboard.md        # Claude Code slash-command skill
+│   └── onboard_dashboard.md        # step-by-step onboarding guide
+├── ARCHITECTURE.md                 # cell-by-cell execution flow diagram
 └── requirements.txt
 ```
 
@@ -55,9 +61,9 @@ Drop `dashboard_validation_framework/` into the root of your project repo.
 ### 2. Create a registry YAML for your dashboard
 
 The easiest way is to use the Claude Code skill (see
-[onboarding/ONBOARD_NEW_DASHBOARD.md](onboarding/ONBOARD_NEW_DASHBOARD.md)).
+[onboarding/onboard_dashboard.md](onboarding/onboard_dashboard.md)).
 
-Or copy `registry/social_hub_consolidated_dashboard.yaml` and edit it:
+Or copy `registry/example_dashboard.yaml` (a blank template) and edit it:
 
 ```yaml
 dashboard: my_dashboard_name
@@ -98,19 +104,50 @@ Set the **job parameters** (Databricks widgets):
 | `registry_root` | absolute path to `registry/` in your Databricks Repo |
 | `slack_webhook` | Slack Incoming Webhook URL (or blank to skip Slack) |
 | `run_week` | blank = auto-detect from `ids_coredata.dim_date` |
+| `log_table` | `catalog.schema.table` — every run's results get appended here |
 
 Schedule it to run **before** your dashboard refresh (e.g. 06:00 UTC if
 refresh is at 06:30 UTC).
 
+`log_table` is shared across every dashboard registry — the `dashboard` column
+tells them apart. It's created automatically on first write; you don't need to
+run any `CREATE TABLE` DDL yourself. See `engine/audit_log.py` for the exact
+schema (one row per check result: `dashboard`, `run_week`, `check_name`,
+`status`, `severity`, `expected`, `actual`, `gap`, `detail`, `triage_analysis`, …).
+
 ### 4. Set up the Anthropic API key (for triage)
 
-Add `ANTHROPIC_API_KEY` to the cluster's environment variables, or use a
-Databricks Secret:
+`triage/agent.py` reads the key from the `ANTHROPIC_API_KEY` environment
+variable — no code changes needed either way. This is a **one-time, per-cluster**
+setup — new dashboards you onboard later don't repeat this step.
 
-```python
-# In validator.ipynb, replace the env var lookup in triage_agent.py:
-api_key = dbutils.secrets.get(scope="my-scope", key="anthropic-api-key")
+**Default path — most users don't have secret-scope permissions.**
+Creating/using a Databricks Secret scope requires an elevated entitlement most
+accounts don't have. If that's you, just set the key directly on your cluster:
+
+*(Cluster → Edit → Advanced Options → Spark → Environment variables)*
 ```
+ANTHROPIC_API_KEY=sk-ant-...
+```
+Only "Can Manage" on your own cluster is required. Trade-off: the raw key is
+stored in plaintext in the cluster config, visible to anyone who can view that
+cluster's settings — fine for a cluster with a small, trusted set of viewers,
+not for a widely-shared one.
+
+**If a workspace admin is available — more secure, no plaintext exposure.**
+Have them create the scope once and grant your team `READ` access:
+```bash
+databricks secrets create-scope --scope dashboard-validation
+databricks secrets put --scope dashboard-validation --key anthropic-api-key
+```
+Then set the cluster environment variable to reference it instead of the raw key:
+```
+ANTHROPIC_API_KEY={{secrets/dashboard-validation/anthropic-api-key}}
+```
+Anyone with `READ` on the scope can use this cluster without ever seeing the
+actual key value.
+
+Restart the cluster after either change.
 
 ### 5. Run it
 

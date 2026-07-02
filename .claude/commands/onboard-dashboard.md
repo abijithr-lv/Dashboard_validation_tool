@@ -76,6 +76,25 @@ information you can without asking. Work through this checklist silently:
 - Is it currency (spend, revenue)? → tolerance 0.5–1.0%
 - Is it an exact count (users, accounts)? → tolerance 0.1–0.5%
 
+**Glossary / data dictionary (if the export includes one)**
+- Multi-page dashboard exports often end with a Glossary or "Definitions" page
+  (columns like Dashboard Field / Source System / Business Definition / Notes).
+  Read it in full — it routinely contains the details that change a YAML from
+  "looks right" to "won't false-positive in week 3." Specifically extract:
+  - **Source system per dimension or metric**, and any cutover language
+    ("Live API replacing X from week YYYY-WW", "sole source until...",
+    "agency A handed off to agency B from week YYYY-WW"). A source migration
+    near the current date means an `expected_values` list built from a single
+    screenshot will likely go stale within weeks.
+  - **Values that are winding down or already at zero** ("Zero X posts from
+    week YYYY-WW onward", "wound down by week YYYY-WW"). These must not go
+    into `expected_values` with `completeness_check: true`, or the check will
+    fail permanently once that value stops appearing.
+  - **Business definitions** that resolve ambiguous metric/dimension names
+    (e.g. two similar-looking click columns that are actually different things).
+  - **Refresh cadence** (day/time) — feeds the `freshness` check's mental model.
+  - **Owners / data steward contacts** — useful context, not a YAML field.
+
 ### Build two lists after analysis
 
 **CONFIRMED** — information you extracted with high confidence from the screenshot.
@@ -86,6 +105,11 @@ information you can without asking. Work through this checklist silently:
 - Often unknown: exact DB column names when display names are ambiguous
 - Often unknown: complete list of dimension values (dropdown may be truncated)
 - Sometimes unknown: `date_column` exact name if format is ambiguous
+- **If no glossary/data-dictionary page was included in what the user shared**:
+  treat "does one exist, and can you share it" as its own unknown — don't
+  silently skip it. A missing glossary means every `expected_values` list you
+  build is a guess with no visibility into source migrations; say so explicitly
+  when you ask (see Phase 3).
 
 ---
 
@@ -104,6 +128,8 @@ Format it like this:
 - Dimensions: [list with visible values]
 - Date: [granularity and inferred column name]
 - [any row exclusions you spotted]
+- [any glossary notes on source-system migrations or values winding down —
+  omit this line entirely if no glossary was shared]
 
 **I need a few more details to complete the YAML:**
 
@@ -126,6 +152,15 @@ Format it like this:
 6. **[Only if no row exclusion was visible]**
    Does your source table include any rows that should NOT appear in the dashboard?
    *(e.g. Budget rows, Test accounts, Draft records — these need a WHERE clause in the checks)*
+
+7. **[Only if no glossary/data-dictionary page was included]**
+   Is there a glossary or data dictionary for this dashboard — something that maps
+   each field to its source system and business definition? If so, please share it
+   too. Without it, dimension completeness lists are a guess: source-system
+   migrations and agency handoffs routinely relabel or retire values, and a
+   glossary is usually the only place that's documented. I'll mark affected
+   dimensions `completeness_check: false` with a `# VERIFY` comment until this
+   is confirmed either way.
 ---
 
 Do NOT ask about tolerance values — you will set sensible defaults and explain them.
@@ -164,6 +199,14 @@ Once you have all the information, generate the complete YAML registry.
   add a comment: `# VERIFY: confirm this is the complete list`
 - If a dimension is shown in the dashboard but values are unknown,
   include it with `completeness_check: false` and a comment to fill in later
+- If the glossary documented a source-system migration, agency handoff, or a
+  value winding down/reaching zero near the current date, set
+  `completeness_check: false` for that dimension regardless of how confident
+  the screenshot alone made you feel, and add a `# VERIFY` comment naming the
+  specific glossary note (e.g. the cutover week). A stale flat label that
+  passed last month can silently fail every week going forward once the
+  source relabels it — this is the single most common cause of persistent
+  false-positive DRIFT/FAIL on completeness checks.
 
 **Row exclusion filter**
 - If the user confirmed a row exclusion (e.g. `data_type != 'Budget'`),
@@ -171,8 +214,8 @@ Once you have all the information, generate the complete YAML registry.
   ```yaml
   row_filter: "data_type != 'Budget'"
   ```
-  Note: checks.py uses `_NON_BUDGET` constant by default. If a different filter is
-  needed, the user will need to update checks.py — flag this in the YAML as a comment.
+  Note: quality_checks.py uses `_NON_BUDGET` constant by default. If a different filter is
+  needed, the user will need to update quality_checks.py — flag this in the YAML as a comment.
 
 **Checks section**
 - Enable all 5 checks by default
@@ -182,6 +225,11 @@ Once you have all the information, generate the complete YAML registry.
   - Stable dashboards: `30.0`
   - Normal dashboards: `50.0`
   - Volatile / seasonal dashboards: `100.0`
+  - If the screenshot/glossary shows a legitimate large WoW swing already on
+    record (e.g. a chart's own WoW indicator, or a glossary note about a
+    launch/migration event), raise the threshold above the swing size and say
+    why in a YAML comment — don't leave it at a default that would flag real,
+    expected business behavior every time it recurs.
 
 ### YAML template to fill in
 
@@ -280,7 +328,7 @@ Once the user approves (even partially — they can say "save it, I'll fix the V
    > **Next steps:**
    > 1. Run the VERIFY SQL queries in Databricks to confirm table names and column names
    > 2. Commit the file to Git — this is the human-approval step
-   > 3. Import `engine/validator.ipynb` into Databricks and configure the 4 widgets
+   > 3. Import `engine/validator.ipynb` into Databricks and configure the 5 widgets
    > 4. Run the notebook once manually against a recent historical week to confirm PASS
    >
    > See `QUICKSTART.md` Steps 5–7 for the full setup instructions."
@@ -298,3 +346,7 @@ Once the user approves (even partially — they can say "save it, I'll fix the V
 - **Never set tolerance below 0.1%** without the user explicitly requesting it.
 - **Never skip the local test** after saving the file.
 - **Never commit the file yourself** — always remind the user that committing is their responsibility (human-approval step).
+- **Never treat "no glossary was shared" as "no glossary exists."** Ask for it
+  (Phase 3, item 7). If the user confirms none exists, proceed with
+  `completeness_check: false` on every dimension you're not personally
+  confident about, rather than guessing a static list.

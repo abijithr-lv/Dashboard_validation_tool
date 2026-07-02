@@ -49,13 +49,18 @@ Metric columns   : numeric KPIs shown on the dashboard
 
 ### Option A — Claude Code skill (15 min, recommended)
 
-```bash
-# Copy the skill into your project
-cp dashboard_validation_framework/onboarding/onboard-dashboard.md \
-   .claude/commands/onboard-dashboard.md
-
-# In a Claude Code session:
+`.claude/commands/onboard-dashboard.md` is already active if you're working
+in this repo — just run, in a Claude Code session:
+```
 /onboard-dashboard
+```
+
+If you copied only `engine/`, `triage/`, and `registry/` into a *different*
+project (rather than using this whole repo), copy that one file into your
+project's `.claude/commands/` directory instead:
+```bash
+cp dashboard_validation_framework/.claude/commands/onboard-dashboard.md \
+   <your-project>/.claude/commands/onboard-dashboard.md
 ```
 
 Claude will ask for a screenshot of your dashboard and generate the YAML.
@@ -64,7 +69,7 @@ Review it carefully, then save it.
 ### Option B — Copy and edit the template (30 min)
 
 ```bash
-cp dashboard_validation_framework/registry/social_hub_consolidated_dashboard.yaml \
+cp dashboard_validation_framework/registry/example_dashboard.yaml \
    dashboard_validation_framework/registry/<your_dashboard_name>.yaml
 ```
 
@@ -149,7 +154,7 @@ If they differ by more, investigate the pipeline before scheduling the job.
 1. Import `engine/validator.ipynb` into your Databricks workspace
    *(Workspace → Import, or sync via Databricks Repos)*
 
-2. Set the four notebook widgets:
+2. Set the five notebook widgets:
 
    | Widget | Value |
    |---|---|
@@ -157,15 +162,30 @@ If they differ by more, investigate the pipeline before scheduling the job.
    | `registry_root` | Absolute Databricks path to `registry/` folder |
    | `slack_webhook` | Your Slack Incoming Webhook URL |
    | `run_week` | Leave blank — auto-detects from `ids_coredata.dim_date` * |
+   | `log_table` | `catalog.schema.table` — created automatically on first run |
 
    > *If your project uses a different date dimension, edit cell 3 of the notebook
    > to query your own dim table instead of `ids_coredata.dim_date`.*
 
-3. Add the Anthropic key to your cluster:
+   `log_table` records every run (PASS, DRIFT, or FAIL) as one row per check —
+   this is what lets you later ask "how often has this dashboard drifted this
+   quarter" instead of only seeing the latest Slack message. It's shared across
+   all dashboards you onboard; the `dashboard` column tells them apart.
+
+3. Add the Anthropic key to your cluster — do this **once per cluster**,
+   not per dashboard:
    *(Cluster → Edit → Advanced → Environment variables)*
    ```
    ANTHROPIC_API_KEY = sk-ant-...
    ```
+   Most accounts don't have permission to create Databricks Secret scopes,
+   so this is the realistic default — just needs "Can Manage" on your own
+   cluster. The trade-off is the raw key sits in plaintext in cluster config,
+   readable by anyone who can view that cluster's settings.
+
+   If a workspace admin can set up a Secret scope for you, use that instead —
+   no plaintext exposure. See `README.md` § "Set up the Anthropic API key"
+   for both paths in full.
 
 4. Create a scheduled job to run this notebook **before** your dashboard refresh.
    *(e.g. if refresh runs at 07:00 UTC, schedule validation at 06:30 UTC)*
@@ -235,5 +255,5 @@ Everything else stays identical.
 ## Need help?
 
 - Full YAML schema reference → [README.md](README.md)
-- Detailed onboarding steps → [onboarding/ONBOARD_NEW_DASHBOARD.md](onboarding/ONBOARD_NEW_DASHBOARD.md)
-- AI-assisted YAML creation → [onboarding/onboard-dashboard.md](onboarding/onboard-dashboard.md) (Claude Code skill)
+- Detailed onboarding steps → [onboarding/onboard_dashboard.md](onboarding/onboard_dashboard.md)
+- AI-assisted YAML creation → [.claude/commands/onboard-dashboard.md](.claude/commands/onboard-dashboard.md) (Claude Code skill, run with `/onboard-dashboard`)
