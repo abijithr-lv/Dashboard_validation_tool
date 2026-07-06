@@ -46,6 +46,16 @@ class ValidationEngine:
             return f"{year - 1}-52"
         return f"{year}-{week - 1:02d}"
 
+    @classmethod
+    def _lookback_weeks(cls, run_week: str, n: int) -> List[str]:
+        """Return the n fiscal weeks immediately before run_week, most recent first."""
+        weeks = []
+        week = run_week
+        for _ in range(max(int(n), 1)):
+            week = cls._prev_week(week)
+            weeks.append(week)
+        return weeks
+
     # ── main entry point ──────────────────────────────────────────────────────
 
     def run(self, run_week: str) -> Dict:
@@ -66,7 +76,8 @@ class ValidationEngine:
         source_table    = reg["source_table"]
         date_column     = reg.get("date_column", "fiscal_yr_and_wk_desc")
         checks_cfg      = reg.get("checks", {})
-        prev_week       = self._prev_week(run_week)
+        lookback_weeks  = int(reg.get("lookback_weeks", 1))
+        prev_weeks      = self._lookback_weeks(run_week, lookback_weeks)
 
         results: List[CheckResult] = []
 
@@ -98,7 +109,7 @@ class ValidationEngine:
                 results.append(
                     run_trend_sanity_check(
                         self.spark, dashboard_table,
-                        metric, run_week, prev_week, max_wow, date_column,
+                        metric, run_week, prev_weeks, max_wow, date_column,
                     )
                 )
 
@@ -126,7 +137,7 @@ class ValidationEngine:
                         run_completeness_check(
                             self.spark, dashboard_table,
                             dim_cfg["name"], dim_cfg.get("expected_values", []),
-                            run_week, date_column,
+                            run_week, prev_weeks, date_column,
                         )
                     )
 

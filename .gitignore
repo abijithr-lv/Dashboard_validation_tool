@@ -1,2 +1,12 @@
 __pycache__/
 *.pyc
+
+# Raw dashboard exports dropped into onboarding/ for /onboard-dashboard to
+# read — never commit these. Only the generated registry YAML and the
+# generated *_validation_summary.md belong in git; the export itself can
+# contain internal contacts/access instructions and is superseded by those
+# two generated files.
+onboarding/*.pdf
+onboarding/*.png
+onboarding/*.jpg
+onboarding/*.jpeg

@@ -16,15 +16,18 @@ flow — which file calls which, in what order.
 ```
 SETUP (once)                          EVERY WEEK (deterministic)
 ─────────────────────                 ───────────────────────────────
-Dashboard screenshot                  Databricks job reads registry YAML
+Drop PDF/screenshot in onboarding/    Databricks job reads registry YAML
        ↓                                          ↓
-Claude derives spec                   Recomputes metrics from source tables
+Claude derives spec + summary .md     Recomputes metrics from source tables
        ↓                                          ↓
-You review & lock YAML                Compares vs dashboard → PASS/DRIFT/FAIL
-  (registry/)                                     ↓
+You review & commit YAML + summary    Compares vs dashboard → PASS/DRIFT/FAIL
+  (registry/, onboarding/)                        ↓
                                       Slack report posted
                                       On FAIL → Claude explains why
 ```
+
+The raw PDF/screenshot itself is never committed — see
+[onboarding/](onboarding/) below.
 
 ---
 
@@ -45,7 +48,9 @@ dashboard_validation_framework/
 ├── .claude/commands/
 │   └── onboard-dashboard.md        # Claude Code slash-command skill (single copy)
 ├── onboarding/
-│   └── onboard_dashboard.md        # step-by-step onboarding guide
+│   ├── onboard_dashboard.md        # step-by-step onboarding guide
+│   ├── <dashboard>.pdf              # drop your dashboard export here (gitignored)
+│   └── <dashboard>_validation_summary.md  # generated — commit this one
 ├── ARCHITECTURE.md                 # cell-by-cell execution flow diagram
 └── requirements.txt
 ```
@@ -56,12 +61,18 @@ dashboard_validation_framework/
 
 ### 1. Copy the folder
 
-Drop `dashboard_validation_framework/` into the root of your project repo.
+Drop `dashboard_validation_framework/` into the root of your project repo
+(most teams do this by cloning this repo into a new one they own).
 
 ### 2. Create a registry YAML for your dashboard
 
 The easiest way is to use the Claude Code skill (see
-[onboarding/onboard_dashboard.md](onboarding/onboard_dashboard.md)).
+[onboarding/onboard_dashboard.md](onboarding/onboard_dashboard.md)):
+export or screenshot your dashboard, save the file into `onboarding/`, then
+run `/onboard-dashboard` in Claude Code. It reads the file straight from
+that folder and generates both the registry YAML and a plain-English
+`onboarding/<dashboard>_validation_summary.md` for you to review before
+committing.
 
 Or copy `registry/example_dashboard.yaml` (a blank template) and edit it:
 
@@ -175,10 +186,15 @@ Trigger the job manually for the first time. You should see:
 | `freshness` | Latest date in dashboard == run_week | Any mismatch |
 | `reconciliation` | Dashboard SUM(metric) ≈ source SUM(metric) | Gap > tolerance_pct × 3 |
 | `parts_sum` | Per-platform dashboard subtotals ≈ source subtotals | 2+ platforms out of tolerance |
-| `trend_sanity` | WoW change within bounds | \|WoW%\| > max_wow_change_pct × 1.5 |
-| `completeness` | All expected dimension values present | 2+ values missing |
+| `trend_sanity` | Change vs. the `lookback_weeks`-average baseline within bounds | \|change%\| > max_wow_change_pct × 1.5 |
+| `completeness` | All expected dimension values present; values absent from the last `lookback_weeks` weeks are flagged as new | 2+ expected values missing |
 
-DRIFT = approaching but not yet at the FAIL threshold. Useful for early warning.
+DRIFT = approaching but not yet at the FAIL threshold, or a new dimension
+value surfaced for review. Useful for early warning.
+
+`lookback_weeks` (registry-level, default `1`) controls both of the above:
+it's the trailing window `trend_sanity` averages over and the history window
+`completeness` checks before calling a value "new."
 
 ---
 
@@ -194,16 +210,24 @@ dashboard_table: <schema.table>   # the Delta table the BI tool reads
 source_table:    <schema.table>   # the gold/silver source to recompute from
 date_column:     <column_name>    # default: fiscal_yr_and_wk_desc
 date_format:     <string>         # informational only — YYYY-WW
+lookback_weeks:  <int>            # default 1 — trailing weeks for trend_sanity's
+                                   # baseline average and completeness's new-value window
 
 metrics:
   - name:          <column>       # must exist in both tables
     tolerance_pct: <float>        # max acceptable gap, e.g. 1.0 = 1%
     checks:        [reconciliation, trend_sanity]
 
+derived_metrics:                  # optional, informational only — not checked by the engine
+  - name:    <column>             # a ratio/formula derived from the metrics above
+    formula: <string>             # e.g. "influenced_web_visits / impressions"
+
 dimensions:
   - name:                <column>
     completeness_check:  true|false
     expected_values:     [Value1, Value2, ...]
+    # a value present this week but absent from expected_values AND from the
+    # trailing lookback_weeks weeks is reported as new/unexpected (DRIFT)
 
 checks:
   freshness:      { enabled: true|false }

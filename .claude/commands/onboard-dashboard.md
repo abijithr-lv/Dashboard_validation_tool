@@ -12,25 +12,34 @@ you can extract yourself from a screenshot.
 
 ---
 
-## PHASE 1 — Request the screenshot
+## PHASE 1 — Request the dashboard export
 
 Say exactly this to the user (nothing more):
 
-> "Please share a screenshot of the dashboard you want to validate.
-> Drag and drop the image file into this chat, or paste it directly.
+> "Please export the dashboard (PDF export or screenshot image) and save it
+> into the `onboarding/` folder of this repo, then tell me it's there.
 >
-> If you cannot share a screenshot, describe:
+> If you cannot export a file, describe:
 > - The KPI cards or charts shown (metric names and rough values)
 > - The filters or slicers visible (dimension names and their options)
 > - The title of the dashboard"
 
 Wait for their response before proceeding.
 
+Once they confirm, look inside the `onboarding/` folder for the file
+(`.pdf`, `.png`, `.jpg`, `.jpeg` — anything that isn't `onboard_dashboard.md`
+or a previously generated `*_validation_summary.md`). Read it directly with
+the Read tool; do not ask the user to paste it into the chat.
+- If more than one candidate file is present, list them and ask which one
+  to use before proceeding.
+- If none is found, tell the user you don't see a file in `onboarding/` yet
+  and wait — don't guess or proceed on a description they haven't given you.
+
 ---
 
-## PHASE 2 — Analyze the screenshot
+## PHASE 2 — Analyze the dashboard export
 
-When you receive a screenshot (or description), extract every piece of
+When you receive the file (or a description), extract every piece of
 information you can without asking. Work through this checklist silently:
 
 ### Extract from the screenshot
@@ -56,6 +65,29 @@ information you can without asking. Work through this checklist silently:
   - Dimension name and likely DB column name
   - Visible values (what options appear in dropdowns or legend labels)
   - Whether it appears in every chart (→ likely always present) or only some
+- Sort every value you see into one of two buckets:
+  - **Expected** — values that read as an established, ongoing part of the
+    business (present across multiple weeks in a trend chart, named in the
+    glossary, or otherwise clearly not brand-new).
+  - **Unexpected / new this week** — a value that appears in only the most
+    recent week of a trend chart and nowhere in earlier weeks, or that you
+    otherwise can't confirm has existed before. Don't silently fold these
+    into `expected_values` — a real new campaign/creative/platform looks
+    identical, in a single screenshot, to a data glitch. Call it out in
+    Phase 3 and let the user say which it is.
+
+**Derived / aiding columns** (calculated, not raw)
+- Look for: ratio metrics that are visibly computed from two other metrics
+  on the same dashboard (visit rate = visits ÷ impressions, cost-per-visit =
+  spend ÷ visits, CPM, CPV, conversion rate, ROMs, ARR-per-spend, etc.), and
+  any glossary formulas that derive one metric from another (e.g. a
+  multiplier like "Acrobat TwP Conversions = TwP * 0.48").
+- These are real numbers on the dashboard, but they are NOT independently
+  summable source columns — reconciling them the same way as `spend` or
+  `impressions` would be meaningless (a ratio of sums isn't a sum of
+  ratios). List them separately from primary metrics; they go into
+  `derived_metrics` as documentation, not into `metrics` with a
+  `tolerance_pct`.
 
 **Date information**
 - Look for: date filter, X-axis showing dates, "Week", "Month", "Fiscal Week" labels.
@@ -122,10 +154,17 @@ Compose a SINGLE message that:
 Format it like this:
 
 ---
-**From the screenshot I identified:**
+**Here is everything I'll validate for this dashboard:**
 - Dashboard: [name you inferred]
-- Metrics: [list with inferred DB column names]
-- Dimensions: [list with visible values]
+- **Primary metrics** (reconciliation + trend checks): [list with inferred DB column names]
+- **Derived / aiding columns** (documented only, not directly checked — see
+  above): [list, or "none spotted" if there weren't any calculated ratios
+  or glossary formulas]
+- **Dimensions — expected values** (used for completeness checks): [list per
+  dimension]
+- **Dimensions — unexpected / new this week** (seen in the screenshot but
+  not confirmed as an established value): [list, or "none" if everything
+  looked established]
 - Date: [granularity and inferred column name]
 - [any row exclusions you spotted]
 - [any glossary notes on source-system migrations or values winding down —
@@ -133,27 +172,45 @@ Format it like this:
 
 **I need a few more details to complete the YAML:**
 
-1. **Databricks dashboard table name** — the Delta table your BI tool reads from
+1. **Lookback window** — how many trailing weeks of history should the
+   checks use? This controls two things: (a) the trend check compares the
+   current week against the *average* of this many prior weeks instead of
+   just last week, which smooths out one noisy week; (b) a dimension value
+   isn't flagged as "new/unexpected" unless it's also absent from all of
+   these prior weeks (so a value that just rotates in and out isn't
+   reported as new every time). Default is **4 weeks** — say a different
+   number if you want a longer or shorter window, or "1" to fall back to a
+   plain week-over-week comparison with no new-value detection.
+
+2. **Databricks dashboard table name** — the Delta table your BI tool reads from
    *(e.g. `socialmedia.video_engagement_dashboard`)*
 
-2. **Databricks source table name** — the upstream silver/gold table the pipeline writes to
+3. **Databricks source table name** — the upstream silver/gold table the pipeline writes to
    *(e.g. `socialmedia.video_engagement_silver`)*
 
-3. **Date column name** — I inferred `[your guess]` — is that correct, or is it different?
+4. **Date column name** — I inferred `[your guess]` — is that correct, or is it different?
    *(Run `DESCRIBE TABLE your_dashboard_table` in Databricks to confirm)*
 
-4. **[Only if uncertain]** Exact DB column names for: [list ambiguous metrics]
+5. **[Only if uncertain]** Exact DB column names for: [list ambiguous metrics]
    *(Run `DESCRIBE TABLE your_source_table` to get the exact column list)*
 
-5. **[Only if dimension values were truncated in screenshot]**
+6. **[Only if dimension values were truncated in screenshot]**
    Are there more [platform/region/etc.] values beyond [what you saw]?
    Should all of them always be present each week, or are some optional?
 
-6. **[Only if no row exclusion was visible]**
+7. **[Only if any dimension values landed in "unexpected / new this week"]**
+   For each one: is this a legitimate new addition (new creative, new
+   platform, new campaign) that should be added to `expected_values` going
+   forward, or does it look like a data issue that shouldn't be there at
+   all? I'll add confirmed-legitimate values to `expected_values`; anything
+   you're unsure about stays out of `expected_values` so the lookback-window
+   new-value check keeps watching it.
+
+8. **[Only if no row exclusion was visible]**
    Does your source table include any rows that should NOT appear in the dashboard?
    *(e.g. Budget rows, Test accounts, Draft records — these need a WHERE clause in the checks)*
 
-7. **[Only if no glossary/data-dictionary page was included]**
+9. **[Only if no glossary/data-dictionary page was included]**
    Is there a glossary or data dictionary for this dashboard — something that maps
    each field to its source system and business definition? If so, please share it
    too. Without it, dimension completeness lists are a guess: source-system
@@ -192,9 +249,26 @@ Once you have all the information, generate the complete YAML registry.
 - Add a YAML comment on any metric where you are less than 100% confident
   about the column name: `# VERIFY: confirm column name in source table`
 
+**Derived / aiding columns section**
+- Any ratio/calculated column identified in Phase 2 (visit rate, cost per
+  visit, CPM, CPV, ROMs, glossary multipliers, etc.) goes into
+  `derived_metrics`, never into `metrics`. Include its formula so a future
+  reader knows it's calculated, not a raw summable column.
+- Never give a `derived_metrics` entry a `tolerance_pct` or add it to
+  `checks` — the engine doesn't validate this section; it's documentation.
+
 **Dimensions section**
-- Only include a dimension in `expected_values` if you are confident the value
-  appears EVERY period (not just sometimes)
+- Only include a dimension value in `expected_values` if you are confident
+  it appears EVERY period (not just sometimes) — this applies to values
+  from the **expected** bucket in Phase 2 only.
+- Values from the **unexpected / new this week** bucket never go straight
+  into `expected_values`. Handle them per the user's Phase 3 answer:
+  - Confirmed legitimate → add to `expected_values` like any other value.
+  - Confirmed a data issue, or user unsure → leave out of `expected_values`
+    entirely, and add a `# VERIFY` comment naming it explicitly (e.g.
+    `# VERIFY: "Threads" appeared 2026-W27 only — confirm before adding`).
+    Leaving it out is what lets the lookback-window new-value check keep
+    surfacing it on future runs instead of going silent.
 - If you saw values in a screenshot but are unsure about completeness,
   add a comment: `# VERIFY: confirm this is the complete list`
 - If a dimension is shown in the dashboard but values are unknown,
@@ -207,6 +281,16 @@ Once you have all the information, generate the complete YAML registry.
   passed last month can silently fail every week going forward once the
   source relabels it — this is the single most common cause of persistent
   false-positive DRIFT/FAIL on completeness checks.
+
+**Lookback window**
+- Set the top-level `lookback_weeks` field to the number the user gave in
+  Phase 3 (default `4` if they didn't override it).
+- If the dashboard's own trend charts show fewer than `lookback_weeks` weeks
+  of history (e.g. a brand-new campaign with only 2 weeks of data), lower
+  `lookback_weeks` to match and add a `# VERIFY` comment noting it should be
+  raised once more history accumulates — a window longer than the available
+  history just means every completeness check falls back to "no lookback
+  data," silently disabling new-value detection.
 
 **Row exclusion filter**
 - If the user confirmed a row exclusion (e.g. `data_type != 'Budget'`),
@@ -246,11 +330,15 @@ dashboard_table: [schema.table_name]
 source_table:    [schema.source_table_name]
 date_column:     [column_name]
 date_format:     "[YYYY-WW or YYYY-MM-DD etc.]"
+lookback_weeks:  [int — from Phase 3 answer, default 4]
 
 # row_filter: "[optional: e.g. data_type != 'Budget']"   # uncomment if needed
 
 metrics:
   [one entry per metric]
+
+# derived_metrics:                 # omit this section entirely if none were spotted
+#   [one entry per calculated ratio / glossary formula, informational only]
 
 dimensions:
   [one entry per dimension with completeness_check: true]
@@ -300,14 +388,19 @@ After showing the YAML:
    *(e.g. "spend at 0.5% because currency metrics should be exact;
    video_views at 2.0% because view counts vary by when the job runs")*
 
-3. **Ask for approval:**
+3. **Explain the lookback window** in one sentence
+   *(e.g. "lookback_weeks: 4 — the trend check compares this week against
+   the 4-week average, and a dimension value has to be missing from all 4
+   of those weeks before a reappearance counts as brand-new")*
+
+4. **Ask for approval:**
    > "Does everything look correct? If yes, I'll save this to
    > `dashboard_validation_framework/registry/[name].yaml`.
    > If any field needs changing, tell me and I'll update the YAML."
 
 ---
 
-## PHASE 6 — Save the file
+## PHASE 6 — Save the YAML and the validation summary
 
 Once the user approves (even partially — they can say "save it, I'll fix the VERIFYs later"):
 
@@ -316,24 +409,87 @@ Once the user approves (even partially — they can say "save it, I'll fix the V
    dashboard_validation_framework/registry/[dashboard_name].yaml
    ```
 
-2. Run the local test immediately to confirm the YAML parses correctly:
+2. Generate a plain-English companion doc and save it to:
+   ```
+   dashboard_validation_framework/onboarding/[dashboard_name]_validation_summary.md
+   ```
+   This is what a reviewer reads before approving the commit — it must
+   stand on its own without requiring them to parse YAML. Use this template:
+
+   ```markdown
+   # [Dashboard Display Name] — Validation Summary
+
+   Generated by /onboard-dashboard on [today's date].
+   Plain-English companion to `registry/[dashboard_name].yaml` — read this
+   before committing either file.
+
+   ## What gets validated
+   [1–2 sentence description of the dashboard and who uses it]
+
+   ## Metrics checked
+   | Metric | Column | Checks | Tolerance | Why this tolerance |
+   |---|---|---|---|---|
+   | [display name] | `[column]` | reconciliation, trend_sanity | ±X% | [one clause] |
+
+   ## Derived / aiding columns (shown for context — not directly checked)
+   <!-- omit this whole section if Phase 2 found none -->
+   | Column | Formula |
+   |---|---|
+   | `[column]` | `[formula]` |
+
+   ## Dimensions & expected values
+   | Dimension | Expected values | Completeness checked? |
+   |---|---|---|
+   | `[column]` | [Value1, Value2, ...] | Yes / No — [reason if No] |
+
+   ## New / unexpected values flagged for review
+   <!-- omit this whole section if none were flagged -->
+   - `[dimension]`: "[value]" — seen this week only; not yet in
+     expected_values. [what the user said in Phase 3, or "awaiting
+     confirmation" if still open]
+
+   ## Lookback window
+   `lookback_weeks: [N]` — [one sentence, same explanation given in Phase 5]
+
+   ## Checks enabled for this dashboard
+   | Check | What it does here |
+   |---|---|
+   | freshness | Fails if the latest week in the dashboard isn't the run week |
+   | reconciliation | Dashboard totals must match source totals within tolerance, per metric |
+   | parts_sum | Per-`[pivot_column]` subtotals must reconcile |
+   | trend_sanity | Change vs. the `[N]`-week average must stay within ±`[max_wow_change_pct]`% |
+   | completeness | All expected `[dimension]` values must appear; new ones get flagged |
+
+   ## Still needs verification before committing
+   <!-- omit this whole section if there are no # VERIFY items -->
+   - [ ] [VERIFY item, in plain English] — run: `[the exact SQL from Phase 5]`
+   ```
+
+3. Run the local test immediately to confirm the YAML parses correctly:
    ```bash
    cd dashboard_validation_framework
    python test_local.py
    ```
 
-3. If the test passes, tell the user:
-   > "YAML saved and local test passing.
+4. If the test passes, tell the user:
+   > "YAML and validation summary saved. Local test passing.
    >
    > **Next steps:**
-   > 1. Run the VERIFY SQL queries in Databricks to confirm table names and column names
-   > 2. Commit the file to Git — this is the human-approval step
-   > 3. Import `engine/validator.ipynb` into Databricks and configure the 5 widgets
-   > 4. Run the notebook once manually against a recent historical week to confirm PASS
+   > 1. Read `onboarding/[dashboard_name]_validation_summary.md` and confirm
+   >    it matches what you expect this dashboard to be checked against
+   > 2. Run the VERIFY SQL queries in Databricks to confirm table names and column names
+   > 3. Commit `registry/[dashboard_name].yaml` and the validation summary
+   >    to Git — this is the human-approval step. Do not commit the raw
+   >    PDF/screenshot from `onboarding/` — it's gitignored on purpose (it
+   >    can contain internal contacts and access instructions that don't
+   >    belong in git history, and it's already superseded by the summary doc)
+   > 4. Import `engine/validator.ipynb` into Databricks and configure the 5 widgets
+   > 5. Run the notebook once manually against a recent historical week to confirm PASS
    >
    > See `QUICKSTART.md` Steps 5–7 for the full setup instructions."
 
-4. If the test fails, show the error and fix the YAML before asking the user to proceed.
+5. If the test fails, show the error and fix the YAML (and the summary doc,
+   if the fix changes what it describes) before asking the user to proceed.
 
 ---
 
@@ -347,6 +503,18 @@ Once the user approves (even partially — they can say "save it, I'll fix the V
 - **Never skip the local test** after saving the file.
 - **Never commit the file yourself** — always remind the user that committing is their responsibility (human-approval step).
 - **Never treat "no glossary was shared" as "no glossary exists."** Ask for it
-  (Phase 3, item 7). If the user confirms none exists, proceed with
+  (Phase 3, item 9). If the user confirms none exists, proceed with
   `completeness_check: false` on every dimension you're not personally
   confident about, rather than guessing a static list.
+- **Never put a derived/calculated ratio in `metrics`.** Visit rate, cost-per-X,
+  CPM/CPV, ROMs, and glossary multipliers go in `derived_metrics` (documentation
+  only) — reconciling a ratio against a source table's ratio is not meaningful.
+- **Never fold a value from the "unexpected / new this week" bucket into
+  `expected_values` without the user confirming it in Phase 3.** A single
+  screenshot can't distinguish a legitimate new creative/platform from a
+  data glitch — that's the user's call, not a guess to make silently.
+- **Never skip generating the validation summary `.md`.** It's the artifact
+  a non-technical reviewer actually reads before approving the commit —
+  treat it as required output, not optional documentation.
+- **Never tell the user to commit the raw PDF/screenshot from `onboarding/`.**
+  Only the registry YAML and the validation summary belong in git.

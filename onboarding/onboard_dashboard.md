@@ -22,6 +22,11 @@ Before writing any YAML, answer these questions:
 
 ## Step 2 — Use the Claude Code skill (recommended)
 
+Export or screenshot the dashboard (PDF export is best — it captures every
+page including the glossary) and save the file into this `onboarding/`
+folder, next to this guide. It's gitignored, so it won't get committed —
+it's only there for Claude to read during this session.
+
 If you're working in this repo, `.claude/commands/onboard-dashboard.md` is
 already active — nothing to copy. In a Claude Code session:
 
@@ -29,8 +34,14 @@ already active — nothing to copy. In a Claude Code session:
 /onboard-dashboard
 ```
 
-Claude will ask for a screenshot of the dashboard and guide you through
-generating the YAML registry. Review the output carefully before saving.
+Claude will confirm the file it found in `onboarding/`, read it, and guide
+you through generating:
+- `registry/<dashboard_name>.yaml` — the check config
+- `onboarding/<dashboard_name>_validation_summary.md` — a plain-English
+  summary of what's being checked, for a reviewer who won't read the YAML
+
+Review both before saving. Once saved, commit those two files — leave the
+raw PDF/screenshot uncommitted (see `.gitignore`).
 
 If you copied only `engine/`, `triage/`, and `registry/` into a *different*
 project, copy the skill file into that project's `.claude/commands/` instead:
@@ -96,12 +107,15 @@ than no validation.
 
 ---
 
-## Step 5 — Commit the YAML
+## Step 5 — Commit the YAML and the validation summary
 
 ```bash
 git add dashboard_validation_framework/registry/<your_dashboard_name>.yaml
+git add dashboard_validation_framework/onboarding/<your_dashboard_name>_validation_summary.md
 git commit -m "Add validation registry for <your_dashboard_name>"
 ```
+
+Do not add the raw PDF/screenshot — it's gitignored on purpose.
 
 This is the **human-approval step**. Once committed, the job will run
 these checks automatically every week.
@@ -149,6 +163,29 @@ After DRIFT alerts that turned out to be false positives, loosen it.
 The `max_wow_change_pct` for trend sanity defaults to 50%. For stable
 metrics like spend, tighten it to 20–30%. For volatile metrics like
 video_views, 50% or higher is reasonable.
+
+---
+
+## Lookback window (trend smoothing + new-value detection)
+
+`lookback_weeks` (top-level YAML field, default `1`) controls two things:
+
+- `trend_sanity` compares the current week against the *average* of the
+  trailing `lookback_weeks` weeks instead of just the single prior week —
+  useful if one week is naturally noisy and you don't want it to become
+  next week's misleading baseline.
+- `completeness` only flags a dimension value as new/unexpected if it's
+  absent from `expected_values` **and** from all of the trailing
+  `lookback_weeks` weeks. This surfaces genuinely new values (new creative,
+  new platform) as DRIFT for review, without flagging values that just
+  rotate in and out week to week.
+
+```yaml
+lookback_weeks: 4
+```
+
+Set it to `1` to fall back to plain week-over-week comparison with no
+new-value detection window.
 
 ---
 

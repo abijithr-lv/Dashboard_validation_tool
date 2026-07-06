@@ -20,11 +20,22 @@ date_format:     "<YYYY-WW or YYYY-MM-DD>"
 
 # row_filter: "<optional: e.g. data_type != 'Budget'>"   # uncomment if needed
 
+# lookback_weeks : how many trailing weeks of history feed the checks below.
+#   - trend_sanity : compares the current week against the AVERAGE of the
+#                    trailing lookback_weeks weeks instead of just last week,
+#                    smoothing out one noisy week.
+#   - completeness : a dimension value not in expected_values is only flagged
+#                    as new/unexpected if it also hasn't appeared in ANY of
+#                    the trailing lookback_weeks weeks (so a value that just
+#                    rotates in and out isn't reported as "new" every time).
+# Default 1 = old behavior (plain week-over-week, no new-value flagging window).
+lookback_weeks: 4
+
 # ── Metrics ─────────────────────────────────────────────────────────────────
 # tolerance_pct : max acceptable gap between dashboard value and source value.
 # checks        : which check types to run for this metric.
 #   reconciliation — dashboard total ≈ source total
-#   trend_sanity   — week-over-week change within bounds
+#   trend_sanity   — change vs. the lookback_weeks baseline within bounds
 # ─────────────────────────────────────────────────────────────────────────────
 metrics:
 
@@ -32,10 +43,27 @@ metrics:
     tolerance_pct: 1.0
     checks: [reconciliation, trend_sanity]
 
+# ── Derived / aiding columns (optional, informational only) ──────────────────
+# Ratios or glossary-defined formulas calculated FROM the metrics above
+# (e.g. visit_rate = influenced_web_visits / impressions, or a glossary
+# multiplier like "Acrobat TwP Conversions = TwP * 0.48"). These are not
+# reconciled or trend-checked directly by the engine — they're documented
+# here so the next person reading this registry knows they're derived, not
+# raw source columns pulled straight from the table.
+# ─────────────────────────────────────────────────────────────────────────────
+# derived_metrics:
+#   - name: <derived_column>
+#     formula: "<e.g. influenced_web_visits / impressions>"
+#     note: "calculated ratio — not reconciled directly"
+
 # ── Dimensions ──────────────────────────────────────────────────────────────
 # completeness_check : verify all expected_values appear each week.
 # expected_values    : the full set of dimension values the dashboard must have.
 #                      Missing values → DRIFT (1 missing) or FAIL (2+).
+# A value present this week that is neither in expected_values nor seen in
+# the trailing lookback_weeks weeks is reported as new/unexpected (DRIFT) —
+# confirm it's a legitimate addition (new creative, new platform, ...) before
+# adding it to expected_values.
 # ─────────────────────────────────────────────────────────────────────────────
 dimensions:
 

@@ -259,6 +259,48 @@ def t_history_rows():
 
 check("Audit log flattens a run into one log row per CheckResult", t_history_rows)
 
+# ── Test 11: Orchestrator — lookback week math (no Spark) ──────────────────────
+def t_lookback_weeks():
+    from orchestrator import ValidationEngine
+
+    assert ValidationEngine._prev_week("2026-05") == "2026-04"
+    assert ValidationEngine._prev_week("2026-01") == "2025-52"  # year rollover
+    assert ValidationEngine._lookback_weeks("2026-05", 3) == ["2026-04", "2026-03", "2026-02"]
+    assert ValidationEngine._lookback_weeks("2026-01", 2) == ["2025-52", "2025-51"]
+    assert ValidationEngine._lookback_weeks("2026-05", 0) == ["2026-04"]  # n<1 clamps to 1
+
+check("ValidationEngine: _prev_week / _lookback_weeks compute correct trailing fiscal weeks", t_lookback_weeks)
+
+# ── Test 12: Completeness check flags new/unexpected dimension values ─────────
+def t_completeness_new_values():
+    from unittest.mock import MagicMock
+    from quality_checks import run_completeness_check, Status
+
+    class _Row:
+        def __init__(self, val):
+            self._val = val
+        def __getitem__(self, key):
+            return self._val
+
+    spark = MagicMock()
+    # First call: current-week distinct values. Second call: lookback-window distinct values.
+    spark.sql.return_value.collect.side_effect = [
+        [_Row("LinkedIn"), _Row("Instagram"), _Row("Threads")],  # present this week
+        [_Row("LinkedIn"), _Row("Instagram"), _Row("Facebook")],  # seen in lookback window
+    ]
+
+    result = run_completeness_check(
+        spark, "schema.dashboard", "platform",
+        expected_values=["LinkedIn", "Instagram", "Facebook"],
+        run_week="2026-05", prev_weeks=["2026-04", "2026-03"],
+    )
+    # Facebook missing this week -> DRIFT on its own; Threads is new (not expected, not in lookback)
+    assert result.status == Status.DRIFT
+    assert "Threads" in result.detail
+    assert "Facebook" in result.detail
+
+check("Completeness check flags missing AND new/unexpected dimension values", t_completeness_new_values)
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 passed = sum(results)
 total  = len(results)

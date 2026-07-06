@@ -9,8 +9,11 @@ Check types
 freshness      — latest date in dashboard == expected run_week
 reconciliation — dashboard SUM(metric) ≈ source SUM(metric) within tolerance
 parts_sum      — per-dimension subtotals in dashboard ≈ source subtotals
-trend_sanity   — week-over-week change within configured bounds
-completeness   — no expected dimension slice is silently missing
+trend_sanity   — current week vs. the average of the trailing lookback_weeks
+                 (lookback_weeks=1 reduces this to plain week-over-week)
+completeness   — no expected dimension slice is silently missing, and any
+                 slice not seen anywhere in the lookback window is flagged
+                 as a new/unexpected value instead of being ignored
 """
 
 from dataclasses import dataclass
@@ -210,11 +213,17 @@ def run_trend_sanity_check(
     dashboard_table: str,
     metric: str,
     run_week: str,
-    prev_week: str,
+    prev_weeks: List[str],
     max_wow_change_pct: float,
     date_column: str = "fiscal_yr_and_wk_desc",
 ) -> CheckResult:
-    """Week-over-week change must be within max_wow_change_pct."""
+    """Current week must be within max_wow_change_pct of the lookback baseline.
+
+    prev_weeks is the lookback window, most-recent-first. With a single week
+    this is a plain week-over-week comparison; with more weeks the baseline
+    is the average of those weeks' totals, which smooths out one noisy week
+    that would otherwise trip the threshold on its own.
+    """
     non_budget_filter = _NON_BUDGET
 
     current_val = _scalar(spark, f"""
@@ -223,23 +232,37 @@ def run_trend_sanity_check(
         WHERE {date_column} = '{run_week}' AND {non_budget_filter}
     """) or 0.0
 
-    prev_val = _scalar(spark, f"""
-        SELECT COALESCE(SUM({metric}), 0)
+    week_list = ", ".join(f"'{w}'" for w in prev_weeks)
+    weekly_totals = spark.sql(f"""
+        SELECT {date_column} AS wk, COALESCE(SUM({metric}), 0) AS total
         FROM {dashboard_table}
-        WHERE {date_column} = '{prev_week}' AND {non_budget_filter}
-    """) or 0.0
+        WHERE {date_column} IN ({week_list}) AND {non_budget_filter}
+        GROUP BY {date_column}
+    """).collect()
 
-    if float(prev_val) == 0:
+    if not weekly_totals:
         return CheckResult(
             check_name="trend_sanity",
             metric=metric,
             status=Status.PASS,
             expected=None,
             actual=float(current_val),
-            detail=f"No prior-week data ({prev_week}) — trend check skipped",
+            detail=f"No data in lookback window ({', '.join(prev_weeks)}) — trend check skipped",
         )
 
-    wow_pct = (float(current_val) - float(prev_val)) / abs(float(prev_val)) * 100.0
+    baseline_val = sum(float(r["total"]) for r in weekly_totals) / len(weekly_totals)
+
+    if baseline_val == 0:
+        return CheckResult(
+            check_name="trend_sanity",
+            metric=metric,
+            status=Status.PASS,
+            expected=0.0,
+            actual=float(current_val),
+            detail=f"Lookback baseline is zero across {len(weekly_totals)} week(s) — trend check skipped",
+        )
+
+    wow_pct = (float(current_val) - baseline_val) / abs(baseline_val) * 100.0
 
     if abs(wow_pct) <= max_wow_change_pct:
         status = Status.PASS
@@ -248,15 +271,16 @@ def run_trend_sanity_check(
     else:
         status = Status.FAIL
 
+    baseline_label = "prior week" if len(weekly_totals) == 1 else f"{len(weekly_totals)}-week avg"
     return CheckResult(
         check_name="trend_sanity",
         metric=metric,
         status=status,
-        expected=round(float(prev_val), 2),
+        expected=round(baseline_val, 2),
         actual=round(float(current_val), 2),
         gap=round(wow_pct, 2),
         tolerance=max_wow_change_pct,
-        detail=f"WoW change: {wow_pct:+.1f}%  (limit: ±{max_wow_change_pct}%)",
+        detail=f"Change vs {baseline_label}: {wow_pct:+.1f}%  (limit: ±{max_wow_change_pct}%)",
     )
 
 
@@ -266,17 +290,36 @@ def run_completeness_check(
     dimension: str,
     expected_values: List[str],
     run_week: str,
+    prev_weeks: Optional[List[str]] = None,
     date_column: str = "fiscal_yr_and_wk_desc",
 ) -> CheckResult:
-    """Every value in expected_values must appear in the current week's data."""
+    """Every value in expected_values must appear in the current week's data.
+
+    If prev_weeks is given, any current-week value that is neither an
+    expected_value nor seen anywhere in that lookback window is reported as
+    a new/unexpected value — a signal for a human to confirm it's a
+    legitimate addition (new creative, new platform, ...) rather than a data
+    bug, without failing the check outright.
+    """
     present_rows = spark.sql(f"""
         SELECT DISTINCT {dimension}
         FROM {dashboard_table}
         WHERE {date_column} = '{run_week}' AND {_NON_BUDGET}
     """).collect()
-
     present = {r[dimension] for r in present_rows}
+
     missing = [v for v in expected_values if v not in present]
+
+    new_values: List[str] = []
+    if prev_weeks:
+        week_list = ", ".join(f"'{w}'" for w in prev_weeks)
+        historical_rows = spark.sql(f"""
+            SELECT DISTINCT {dimension}
+            FROM {dashboard_table}
+            WHERE {date_column} IN ({week_list}) AND {_NON_BUDGET}
+        """).collect()
+        known = set(expected_values) | {r[dimension] for r in historical_rows}
+        new_values = sorted(v for v in present if v not in known)
 
     if not missing:
         status = Status.PASS
@@ -285,15 +328,27 @@ def run_completeness_check(
     else:
         status = Status.FAIL
 
+    # A brand-new value doesn't fail the check on its own — surface it as
+    # DRIFT for a human to confirm, rather than silently dropping it or
+    # failing a check that's otherwise legitimately complete.
+    if new_values and status == Status.PASS:
+        status = Status.DRIFT
+
+    detail_parts = [
+        f"Missing {dimension} values: {missing}"
+        if missing
+        else f"All {len(expected_values)} expected {dimension} values present"
+    ]
+    if new_values:
+        detail_parts.append(
+            f"New {dimension} values not seen in prior {len(prev_weeks)} week(s): {new_values}"
+        )
+
     return CheckResult(
         check_name="completeness",
         metric=f"{dimension}_completeness",
         status=status,
         expected=len(expected_values),
         actual=len(present),
-        detail=(
-            f"Missing {dimension} values: {missing}"
-            if missing
-            else f"All {len(expected_values)} expected {dimension} values present"
-        ),
+        detail="  |  ".join(detail_parts),
     )
