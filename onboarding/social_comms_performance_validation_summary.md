@@ -28,13 +28,14 @@ stewardship by Raghuram Gopalakrishnan / Nagaraju Gajula.
 | Shares | `shares` | reconciliation, trend_sanity | ±1.5% | engagement-like |
 | Saves | `saves` | reconciliation, trend_sanity | ±1.5% | engagement-like |
 
-Column names were originally best guesses from display names. A real run
-against Databricks caught one wrong guess immediately: `clicks` doesn't
-exist — the actual column is **`clicks_all`**. Spark's `UNRESOLVED_COLUMN`
-suggestion list from that same error also confirmed `likes`, `saves`, and
-`link_clicks` are correct as guessed. `spend`, `impressions`, `interactions`,
-`engagements`, `video_views`, `comments`, and `shares` are still unconfirmed
-guesses and carry `# VERIFY` in the YAML.
+Column names were originally best guesses from display names. Two real
+Databricks runs have since validated them: the first caught `clicks` as
+wrong (actual column is **`clicks_all`**) and confirmed `likes`, `saves`,
+and `link_clicks` via the `UNRESOLVED_COLUMN` suggestion list. The second
+run got all the way through reconciliation + trend_sanity for every metric
+above with no errors — so `spend`, `impressions`, `interactions`,
+`engagements`, `video_views`, and `comments` are now confirmed too. All
+metric `# VERIFY` comments have been cleared.
 
 ## Derived / aiding columns (shown for context — not directly checked)
 
@@ -50,13 +51,17 @@ guesses and carry `# VERIFY` in the YAML.
 
 | Dimension | Expected values | Completeness checked? |
 |---|---|---|
-| `media_type` | Earned, Organic, Influencer (organic + boosting), Influencer (organic only), Paid - Boosted Owned, Paid - Boosted Whitelisted, Paid - Dark Owned, Paid - Dark Whitelisted, Paid (fallback) | **No** — four concurrent source migrations landed on this dimension (see below) |
+| `ad_type` | Earned, Organic, Influencer (organic + boosting), Influencer (organic only), Paid - Boosted Owned, Paid - Boosted Whitelisted, Paid - Dark Owned, Paid - Dark Whitelisted, Paid (fallback) | **No** — four concurrent source migrations landed on this dimension (see below) |
 | `platform` | Instagram Stories, TikTok, NA, Threads, Spotter, Instagram, Snapchat, Twitter, Meta, Facebook, LinkedIn, Pinterest, YouTube, Instagram Reels, INSTAGRAM, YOUTUBE, TIKTOK, Web, LINKEDIN, Reddit | Yes — `unknown`/`null` excluded on purpose (untagged rows) |
 | `gtm_segment_budget` | Lightroom Mobile, Lightroom, Standard Sponsored Content, Acrobat, Experience Cloud, Drawing, D2S, NA, MAX, Japan, Summit, Fresco, EDU, Substance 3D, AllApps, AcrobatDC, Design, Photoshop Mobile, CCE, DVA, CC, Germany, Photoshop Express, United Kingdom, Stock, DCE, Photoshop, Adobe Express, Firefly, France, Brand, MAX Insiders | Yes — `null` excluded on purpose (untagged rows) |
 | `cloud_budget` | Standard Sponsored Content, EC, NA, DC, Cross-Cloud, CC, Brand | Yes — `null` excluded on purpose (untagged rows) |
 | `content_framework_pillar` | Educate, AffinityGaming, Inform, Humorous, NA, Entertain, AffinityFashion, TBD, Inspire, ST | Yes — `null` excluded on purpose (untagged rows) |
 
-### Why `media_type` completeness is off
+### Why `ad_type` completeness is off
+
+(Column name confirmed as `ad_type` via a real Databricks `UNRESOLVED_COLUMN`
+error — not `media_type` as originally guessed; the dashboard display label
+is "Media Type" but the underlying column is `ad_type`.)
 
 The Glossary page documented four separate, still-recent source-system
 changes all on this one dimension:
@@ -66,7 +71,7 @@ changes all on this one dimension:
 4. Organic moved from a manually maintained XLS to the **Sprinklr API starting 2026**, backfilled.
 
 Rather than trust a single screenshot's snapshot against that much churn,
-`completeness_check` is `false` for `media_type` — re-enable it once these
+`completeness_check` is `false` for `ad_type` — re-enable it once these
 migrations have fully settled and the value list is reconfirmed.
 
 ### Data quality notes carried into the YAML (not bugs — documented, not silently dropped)
@@ -87,16 +92,17 @@ weeks before a reappearance counts as brand-new.
 |---|---|
 | freshness | Fails if the latest week in the dashboard isn't the run week |
 | reconciliation | Dashboard totals must match source totals within tolerance, per metric |
-| parts_sum | Per-`media_type` subtotals must reconcile (confirmed: media_type subtotals sum to the dashboard's grand total of 9,370,183,348 interactions) |
+| parts_sum | Per-`ad_type` subtotals must reconcile (confirmed: ad_type subtotals sum to the dashboard's grand total of 9,370,183,348 interactions) |
 | trend_sanity | Whole-table change vs. the 6-week average must stay within ±50% |
-| completeness | All expected values must appear for `platform`, `gtm_segment_budget`, `cloud_budget`, and `content_framework_pillar`; new ones get flagged. `media_type` is currently exempt (see above) |
+| completeness | All expected values must appear for `platform`, `gtm_segment_budget`, `cloud_budget`, and `content_framework_pillar`; new ones get flagged. `ad_type` is currently exempt (see above) |
 
 ## Still needs verification before committing
 
 - [ ] Confirm `dashboard_table` (`socialmedia.social_hub_consolidated_dashboard`) is the exact BI-facing table — run: `DESCRIBE TABLE socialmedia.social_hub_consolidated_dashboard;`
 - [x] `clicks` was wrong — fixed to `clicks_all` after a real Databricks run surfaced `UNRESOLVED_COLUMN`; that same error also confirmed `likes`, `saves`, and `link_clicks`
-- [ ] Confirm remaining unconfirmed metric column names (`spend`, `impressions`, `interactions`, `engagements`, `video_views`, `comments`, `shares`) exist in `socialmedia.social_media_consolidated_silver` — run: `DESCRIBE TABLE socialmedia.social_media_consolidated_silver;`
-- [ ] Confirm `socialmedia.social_media_consolidated_silver` has a `data_type` column (or the engine's hardcoded `_NON_BUDGET` filter — `(data_type != 'Budget' OR data_type IS NULL)`, applied to every query regardless of this YAML — will error). If it doesn't have that column, `engine/quality_checks.py` needs a code change, not a YAML change.
+- [x] All 11 metric columns (`spend`, `impressions`, `interactions`, `engagements`, `video_views`, `clicks_all`, `link_clicks`, `comments`, `likes`, `shares`, `saves`) confirmed — a full reconciliation + trend_sanity pass ran clean against `socialmedia.social_media_consolidated_silver` for every one
+- [x] `media_type` was wrong — fixed to `ad_type` after a real Databricks run surfaced `UNRESOLVED_COLUMN`
+- [x] `data_type` column confirmed to exist on the source table (surfaced in the same `ad_type` error's suggestion list), so the engine's hardcoded `_NON_BUDGET` filter — `(data_type != 'Budget' OR data_type IS NULL)` — is safe to run
 - [ ] Spot-check a recent week's totals dashboard vs. source, e.g. for `interactions`:
   ```sql
   SELECT 'dashboard' AS src, SUM(interactions) AS total
@@ -107,5 +113,5 @@ weeks before a reappearance counts as brand-new.
   FROM socialmedia.social_media_consolidated_silver
   WHERE fiscal_yr_and_wk_desc = '2026-26';
   ```
-- [ ] Decide whether "Influencer (organic only)" should be dropped from `media_type`'s documented value list entirely, now that it's been at zero since week 2026-24
+- [ ] Decide whether "Influencer (organic only)" should be dropped from `ad_type`'s documented value list entirely, now that it's been at zero since week 2026-24
 - [ ] Consider normalizing the case-duplicate `platform` values upstream (`TikTok`/`TIKTOK`, etc.)

@@ -16,32 +16,31 @@ date_format:     "YYYY-WW"
 lookback_weeks:  6
 
 # No row exclusion was confirmed for this dashboard (no Budget/Test/Draft
-# rows called out). NOTE: quality_checks.py unconditionally applies a
-# hardcoded _NON_BUDGET filter — "(data_type != 'Budget' OR data_type IS
-# NULL)" — to every query regardless of this YAML. # VERIFY that
-# socialmedia.social_media_consolidated_silver has a `data_type` column (or
-# the engine's SQL will error); if it doesn't, quality_checks.py needs a
-# code change, not a YAML change.
+# rows called out). quality_checks.py unconditionally applies a hardcoded
+# _NON_BUDGET filter — "(data_type != 'Budget' OR data_type IS NULL)" — to
+# every query regardless of this YAML. CONFIRMED: a real Databricks run's
+# UNRESOLVED_COLUMN suggestion list included `data_type`, so this column
+# exists on the source table and the filter is safe.
 
 metrics:
 
-  - name: spend                    # VERIFY: confirm exact column name in source table
+  - name: spend                    # confirmed: ran clean against source_table in Databricks
     tolerance_pct: 0.5              # currency — should reconcile almost exactly
     checks: [reconciliation, trend_sanity]
 
-  - name: impressions              # VERIFY: confirm exact column name in source table
+  - name: impressions              # confirmed: ran clean against source_table in Databricks
     tolerance_pct: 1.0              # large count
     checks: [reconciliation, trend_sanity]
 
-  - name: interactions             # VERIFY: confirm exact column name in source table
+  - name: interactions             # confirmed: ran clean against source_table in Databricks
     tolerance_pct: 1.0              # large count — the dashboard's primary KPI
     checks: [reconciliation, trend_sanity]
 
-  - name: engagements              # VERIFY: confirm exact column name in source table
+  - name: engagements              # confirmed: ran clean against source_table in Databricks
     tolerance_pct: 1.5              # engagement metric
     checks: [reconciliation, trend_sanity]
 
-  - name: video_views              # VERIFY: confirm exact column name in source table
+  - name: video_views              # confirmed: ran clean against source_table in Databricks
     tolerance_pct: 2.0              # volatile — swings with any single viral post
     checks: [reconciliation, trend_sanity]
 
@@ -53,7 +52,7 @@ metrics:
     tolerance_pct: 1.5
     checks: [reconciliation, trend_sanity]
 
-  - name: comments                 # VERIFY: confirm exact column name in source table
+  - name: comments                 # confirmed: ran clean against source_table in Databricks
     tolerance_pct: 1.5
     checks: [reconciliation, trend_sanity]
 
@@ -61,7 +60,7 @@ metrics:
     tolerance_pct: 1.5
     checks: [reconciliation, trend_sanity]
 
-  - name: shares                   # VERIFY: confirm exact column name in source table
+  - name: shares                   # confirmed: ran clean against source_table in Databricks
     tolerance_pct: 1.5
     checks: [reconciliation, trend_sanity]
 
@@ -89,7 +88,7 @@ derived_metrics:
 
 dimensions:
 
-  - name: media_type
+  - name: ad_type   # confirmed exact column name via Databricks UNRESOLVED_COLUMN suggestion (not "media_type")
     completeness_check: false   # VERIFY: multiple concurrent source migrations on this dimension —
       # (1) "Influencer (organic only)" has gone to zero posts from week 2026-24 onward;
       # (2) "Influencer (organic + boosting)" moved from Golin XLS to CreatorIQ API at week 2026-24 (only ~6 weeks of history as of 2026-30);
@@ -219,7 +218,7 @@ checks:
 
   parts_sum:
     enabled: true
-    pivot_column: media_type   # media_type subtotals sum to the confirmed dashboard total (9,370,183,348 interactions, per Glossary/Deep-dive totals)
+    pivot_column: ad_type   # ad_type subtotals sum to the confirmed dashboard total (9,370,183,348 interactions, per Glossary/Deep-dive totals)
 
   trend_sanity:
     enabled: true
