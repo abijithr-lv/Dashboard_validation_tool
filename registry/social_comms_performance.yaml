@@ -45,11 +45,11 @@ metrics:
     tolerance_pct: 2.0              # volatile — swings with any single viral post
     checks: [reconciliation, trend_sanity]
 
-  - name: clicks                   # VERIFY: confirm exact column name; distinct from link_clicks below (confirmed two separate columns)
+  - name: clicks_all                # confirmed exact column name via Databricks UNRESOLVED_COLUMN suggestion (not "clicks"); distinct from link_clicks below
     tolerance_pct: 1.5
     checks: [reconciliation, trend_sanity]
 
-  - name: link_clicks              # VERIFY: confirm exact column name; distinct from clicks above (confirmed two separate columns)
+  - name: link_clicks              # confirmed exact column name via Databricks UNRESOLVED_COLUMN suggestion; distinct from clicks_all above
     tolerance_pct: 1.5
     checks: [reconciliation, trend_sanity]
 
@@ -57,7 +57,7 @@ metrics:
     tolerance_pct: 1.5
     checks: [reconciliation, trend_sanity]
 
-  - name: likes                    # VERIFY: confirm exact column name in source table
+  - name: likes                    # confirmed exact column name via Databricks UNRESOLVED_COLUMN suggestion
     tolerance_pct: 1.5
     checks: [reconciliation, trend_sanity]
 
@@ -65,7 +65,7 @@ metrics:
     tolerance_pct: 1.5
     checks: [reconciliation, trend_sanity]
 
-  - name: saves                    # VERIFY: confirm exact column name in source table
+  - name: saves                    # confirmed exact column name via Databricks UNRESOLVED_COLUMN suggestion
     tolerance_pct: 1.5
     checks: [reconciliation, trend_sanity]
 

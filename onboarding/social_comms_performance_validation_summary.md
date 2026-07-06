@@ -21,16 +21,20 @@ stewardship by Raghuram Gopalakrishnan / Nagaraju Gajula.
 | Interactions | `interactions` | reconciliation, trend_sanity | ±1.0% | the dashboard's primary KPI, large count |
 | Engagements | `engagements` | reconciliation, trend_sanity | ±1.5% | engagement metric |
 | Video Views | `video_views` | reconciliation, trend_sanity | ±2.0% | volatile — one viral post can swing it |
-| Clicks | `clicks` | reconciliation, trend_sanity | ±1.5% | engagement-like; confirmed distinct from Link Clicks |
+| Clicks | `clicks_all` | reconciliation, trend_sanity | ±1.5% | engagement-like; confirmed distinct from Link Clicks |
 | Link Clicks | `link_clicks` | reconciliation, trend_sanity | ±1.5% | engagement-like; confirmed distinct from Clicks |
 | Comments | `comments` | reconciliation, trend_sanity | ±1.5% | engagement-like |
 | Likes | `likes` | reconciliation, trend_sanity | ±1.5% | engagement-like |
 | Shares | `shares` | reconciliation, trend_sanity | ±1.5% | engagement-like |
 | Saves | `saves` | reconciliation, trend_sanity | ±1.5% | engagement-like |
 
-All column names above are best guesses from display names — none were
-confirmed against `DESCRIBE TABLE`, so every one carries a `# VERIFY` in the
-YAML.
+Column names were originally best guesses from display names. A real run
+against Databricks caught one wrong guess immediately: `clicks` doesn't
+exist — the actual column is **`clicks_all`**. Spark's `UNRESOLVED_COLUMN`
+suggestion list from that same error also confirmed `likes`, `saves`, and
+`link_clicks` are correct as guessed. `spend`, `impressions`, `interactions`,
+`engagements`, `video_views`, `comments`, and `shares` are still unconfirmed
+guesses and carry `# VERIFY` in the YAML.
 
 ## Derived / aiding columns (shown for context — not directly checked)
 
@@ -90,7 +94,8 @@ weeks before a reappearance counts as brand-new.
 ## Still needs verification before committing
 
 - [ ] Confirm `dashboard_table` (`socialmedia.social_hub_consolidated_dashboard`) is the exact BI-facing table — run: `DESCRIBE TABLE socialmedia.social_hub_consolidated_dashboard;`
-- [ ] Confirm all metric column names exist in `socialmedia.social_media_consolidated_silver` — run: `DESCRIBE TABLE socialmedia.social_media_consolidated_silver;`
+- [x] `clicks` was wrong — fixed to `clicks_all` after a real Databricks run surfaced `UNRESOLVED_COLUMN`; that same error also confirmed `likes`, `saves`, and `link_clicks`
+- [ ] Confirm remaining unconfirmed metric column names (`spend`, `impressions`, `interactions`, `engagements`, `video_views`, `comments`, `shares`) exist in `socialmedia.social_media_consolidated_silver` — run: `DESCRIBE TABLE socialmedia.social_media_consolidated_silver;`
 - [ ] Confirm `socialmedia.social_media_consolidated_silver` has a `data_type` column (or the engine's hardcoded `_NON_BUDGET` filter — `(data_type != 'Budget' OR data_type IS NULL)`, applied to every query regardless of this YAML — will error). If it doesn't have that column, `engine/quality_checks.py` needs a code change, not a YAML change.
 - [ ] Spot-check a recent week's totals dashboard vs. source, e.g. for `interactions`:
   ```sql
