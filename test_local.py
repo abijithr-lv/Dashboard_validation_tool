@@ -301,6 +301,159 @@ def t_completeness_new_values():
 
 check("Completeness check flags missing AND new/unexpected dimension values", t_completeness_new_values)
 
+# ── Test 12b: 2+ missing required values escalates to FAIL, not just DRIFT ────
+def t_completeness_fail_on_multiple_missing():
+    from unittest.mock import MagicMock
+    from quality_checks import run_completeness_check, Status
+
+    class _Row:
+        def __init__(self, val):
+            self._val = val
+        def __getitem__(self, key):
+            return self._val
+
+    spark = MagicMock()
+    # Only LinkedIn present; both Instagram and Facebook are missing this week.
+    spark.sql.return_value.collect.side_effect = [
+        [_Row("LinkedIn")],
+        [_Row("LinkedIn"), _Row("Instagram"), _Row("Facebook")],
+    ]
+
+    result = run_completeness_check(
+        spark, "schema.dashboard", "platform",
+        expected_values=["LinkedIn", "Instagram", "Facebook"],
+        run_week="2026-05", prev_weeks=["2026-04"],
+    )
+    assert result.status == Status.FAIL, f"2+ missing required values should FAIL, got {result.status}"
+    assert "Instagram" in result.detail and "Facebook" in result.detail
+
+check("Completeness escalates to FAIL when 2+ required values are missing", t_completeness_fail_on_multiple_missing)
+
+# ── Test 13: parts_sum runs once per pivot column, not just once overall ─────
+def t_parts_sum_multi_pivot():
+    from unittest.mock import MagicMock, patch
+    import orchestrator
+    from quality_checks import CheckResult, Status
+
+    engine = orchestrator.ValidationEngine.__new__(orchestrator.ValidationEngine)
+    engine.spark = MagicMock()
+    engine.registry = {
+        "dashboard": "test_dashboard",
+        "dashboard_table": "schema.dashboard",
+        "source_table": "schema.source",
+        "date_column": "fiscal_yr_and_wk_desc",
+        "lookback_weeks": 1,
+        "metrics": [{"name": "interactions", "tolerance_pct": 1.0, "checks": ["reconciliation"]}],
+        "dimensions": [],
+        "checks": {
+            "freshness": {"enabled": False},
+            "reconciliation": {"enabled": False},
+            "parts_sum": {"enabled": True, "pivot_columns": ["gtm_segment", "content_framework_pillar"]},
+            "trend_sanity": {"enabled": False},
+            "completeness": {"enabled": False},
+        },
+    }
+
+    with patch("orchestrator.run_parts_sum_check") as mock_parts_sum:
+        mock_parts_sum.return_value = CheckResult("parts_sum", "interactions_by_x", Status.PASS, 1, 1)
+        result = engine.run(run_week="2026-05")
+
+    pivot_cols_called = [call.args[5] for call in mock_parts_sum.call_args_list]
+    assert pivot_cols_called == ["gtm_segment", "content_framework_pillar"], (
+        f"Expected one call per pivot column, got: {pivot_cols_called}"
+    )
+    assert len(result["results"]) == 2, "Each pivot column should produce its own independent CheckResult"
+
+check("parts_sum runs independently per configured pivot column", t_parts_sum_multi_pivot)
+
+# ── Test 14: optional_values — absence is silent, presence isn't "new" ───────
+def t_completeness_optional_values():
+    from unittest.mock import MagicMock
+    from quality_checks import run_completeness_check, Status
+
+    class _Row:
+        def __init__(self, val):
+            self._val = val
+        def __getitem__(self, key):
+            return self._val
+
+    def make_spark(present, historical):
+        spark = MagicMock()
+        spark.sql.return_value.collect.side_effect = [
+            [_Row(v) for v in present],
+            [_Row(v) for v in historical],
+        ]
+        return spark
+
+    # Case A: "Summit" (optional) absent this week -> must NOT count as missing.
+    spark = make_spark(
+        present=["Firefly", "Photoshop"],
+        historical=["Firefly", "Photoshop"],
+    )
+    result = run_completeness_check(
+        spark, "schema.dashboard", "gtm_segment",
+        expected_values=["Firefly", "Photoshop"],
+        run_week="2026-05", prev_weeks=["2026-04"],
+        optional_values=["Summit"],
+    )
+    assert result.status == Status.PASS, f"Optional absence should PASS, got {result.status}: {result.detail}"
+
+    # Case B: "Summit" reappears after being absent from the lookback window
+    # -> known optional value, must NOT be flagged as new/unexpected.
+    spark = make_spark(
+        present=["Firefly", "Photoshop", "Summit"],
+        historical=["Firefly", "Photoshop"],
+    )
+    result = run_completeness_check(
+        spark, "schema.dashboard", "gtm_segment",
+        expected_values=["Firefly", "Photoshop"],
+        run_week="2026-05", prev_weeks=["2026-04"],
+        optional_values=["Summit"],
+    )
+    assert result.status == Status.PASS, f"Optional presence should PASS, got {result.status}: {result.detail}"
+    assert "Summit" not in result.detail, "Optional value must not be reported as new"
+
+    # Case C: control — a required value missing still alerts as before.
+    spark = make_spark(
+        present=["Firefly"],
+        historical=["Firefly", "Photoshop"],
+    )
+    result = run_completeness_check(
+        spark, "schema.dashboard", "gtm_segment",
+        expected_values=["Firefly", "Photoshop"],
+        run_week="2026-05", prev_weeks=["2026-04"],
+        optional_values=["Summit"],
+    )
+    assert result.status == Status.DRIFT, f"Missing required value should DRIFT, got {result.status}"
+    assert "Photoshop" in result.detail
+
+check("Completeness: optional_values absent silently, present without 'new' flag, required still alerts", t_completeness_optional_values)
+
+# ── Test 16: sanity_range flags any row violating a logically-impossible rule ──
+def t_sanity_range_check():
+    from unittest.mock import MagicMock
+    from quality_checks import run_sanity_range_check, Status
+
+    # Case A: no violations -> PASS
+    spark = MagicMock()
+    spark.sql.return_value.collect.return_value = [{"total": 1000, "violations": 0}]
+    result = run_sanity_range_check(
+        spark, "schema.dashboard", "spend_non_negative", "spend < 0", run_week="2026-05",
+    )
+    assert result.status == Status.PASS, f"Zero violations should PASS, got {result.status}"
+
+    # Case B: even a single violation -> FAIL, no DRIFT tier for a logically-impossible rule
+    spark = MagicMock()
+    spark.sql.return_value.collect.return_value = [{"total": 1000, "violations": 1}]
+    result = run_sanity_range_check(
+        spark, "schema.dashboard", "clicks_le_interactions",
+        "link_clicks > interactions", run_week="2026-05",
+    )
+    assert result.status == Status.FAIL, f"Any violation should FAIL, got {result.status}"
+    assert "clicks_le_interactions" in result.detail
+
+check("sanity_range: zero violations PASS, any violation FAILs immediately (no DRIFT tier)", t_sanity_range_check)
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 passed = sum(results)
 total  = len(results)

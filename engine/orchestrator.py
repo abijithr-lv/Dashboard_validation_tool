@@ -18,6 +18,7 @@ from quality_checks import (
     run_parts_sum_check,
     run_trend_sanity_check,
     run_completeness_check,
+    run_sanity_range_check,
 )
 
 
@@ -113,33 +114,57 @@ class ValidationEngine:
                     )
                 )
 
-        # 3 — Parts-sum (platform breakdown for every reconciled metric)
+        # 3 — Parts-sum (one breakdown check per pivot column, per reconciled metric)
         if checks_cfg.get("parts_sum", {}).get("enabled", True):
-            pivot_col = checks_cfg.get("parts_sum", {}).get("pivot_column", "platform")
+            pivot_cols = checks_cfg.get("parts_sum", {}).get("pivot_columns")
+            if pivot_cols is None:
+                # Back-compat: older registries set a single pivot_column.
+                pivot_cols = [checks_cfg.get("parts_sum", {}).get("pivot_column", "platform")]
+
             for metric_cfg in reg.get("metrics", []):
                 if "reconciliation" in metric_cfg.get("checks", []):
                     metric        = metric_cfg["name"]
                     tolerance_pct = float(str(metric_cfg.get("tolerance_pct", 1.0)).rstrip("%"))
-                    print(f"[engine] Running: parts_sum / {metric} by {pivot_col}")
-                    results.append(
-                        run_parts_sum_check(
-                            self.spark, dashboard_table, source_table,
-                            metric, run_week, pivot_col, tolerance_pct, date_column,
+                    for pivot_col in pivot_cols:
+                        print(f"[engine] Running: parts_sum / {metric} by {pivot_col}")
+                        results.append(
+                            run_parts_sum_check(
+                                self.spark, dashboard_table, source_table,
+                                metric, run_week, pivot_col, tolerance_pct, date_column,
+                            )
                         )
-                    )
 
         # 4 — Completeness (one check per dimension with completeness_check: true)
         if checks_cfg.get("completeness", {}).get("enabled", True):
             for dim_cfg in reg.get("dimensions", []):
                 if dim_cfg.get("completeness_check", False):
+                    # required_values is the preferred key; expected_values kept
+                    # as a back-compat alias for registries written before the
+                    # required/optional split existed.
+                    required = dim_cfg.get("required_values", dim_cfg.get("expected_values", []))
+                    optional = dim_cfg.get("optional_values", [])
                     print(f"[engine] Running: completeness / {dim_cfg['name']}")
                     results.append(
                         run_completeness_check(
                             self.spark, dashboard_table,
-                            dim_cfg["name"], dim_cfg.get("expected_values", []),
+                            dim_cfg["name"], required,
                             run_week, prev_weeks, date_column,
+                            optional,
                         )
                     )
+
+        # 5 — Sanity range (one check per rule — logically-impossible states)
+        if checks_cfg.get("sanity_range", {}).get("enabled", True):
+            for rule in checks_cfg.get("sanity_range", {}).get("rules", []):
+                rule_name = rule["name"]
+                condition = rule["expression"]
+                print(f"[engine] Running: sanity_range / {rule_name}")
+                results.append(
+                    run_sanity_range_check(
+                        self.spark, dashboard_table,
+                        rule_name, condition, run_week, date_column,
+                    )
+                )
 
         # ── aggregate ────────────────────────────────────────────────────────
         n_fail  = sum(1 for r in results if r.status == Status.FAIL)

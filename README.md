@@ -89,12 +89,13 @@ metrics:
 dimensions:
   - name: platform
     completeness_check: true
-    expected_values: [LinkedIn, Instagram, Facebook]
+    required_values: [LinkedIn, Instagram, Facebook]   # must appear every week
+    optional_values: []                                # legitimately sporadic — absence never flagged
 
 checks:
   freshness:    { enabled: true }
   reconciliation: { enabled: true }
-  parts_sum:    { enabled: true, pivot_column: platform }
+  parts_sum:    { enabled: true, pivot_columns: [platform] }
   trend_sanity: { enabled: true, max_wow_change_pct: 50.0 }
   completeness: { enabled: true }
 ```
@@ -225,14 +226,27 @@ derived_metrics:                  # optional, informational only — not checked
 dimensions:
   - name:                <column>
     completeness_check:  true|false
-    expected_values:     [Value1, Value2, ...]
-    # a value present this week but absent from expected_values AND from the
+    required_values:     [Value1, Value2, ...]   # must appear every week — missing = DRIFT/FAIL immediately
+    optional_values:     [Value3, ...]           # legitimately sporadic — absence never flagged,
+                                                   # presence never reported as "new" (event-driven
+                                                   # segments, seasonal campaigns, near-zero-volume slices)
+    # expected_values: [...]  # legacy alias for required_values, still supported
+    # a value present this week but absent from BOTH lists AND from the
     # trailing lookback_weeks weeks is reported as new/unexpected (DRIFT)
+
+expected_changes:                   # optional — known, already-scheduled dimension shifts
+  - dimension:      <column>        # (source migrations, agency handoffs, wind-downs)
+    value:          <string>
+    change:         appears|disappears
+    effective_week: <YYYY-WW>       # once run_week reaches this, the shift stops being flagged
 
 checks:
   freshness:      { enabled: true|false }
   reconciliation: { enabled: true|false }
-  parts_sum:      { enabled: true|false, pivot_column: <col> }
+  parts_sum:      { enabled: true|false, pivot_columns: [<col>, ...] }
+  # one independent check per column listed — catches a mislabeling bug that
+  # shifts rows between two values of a column but leaves every other
+  # breakdown (and the grand total) untouched
   trend_sanity:   { enabled: true|false, max_wow_change_pct: <float> }
   completeness:   { enabled: true|false }
 ```

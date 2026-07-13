@@ -57,19 +57,30 @@ metrics:
 #     note: "calculated ratio — not reconciled directly"
 
 # ── Dimensions ──────────────────────────────────────────────────────────────
-# completeness_check : verify all expected_values appear each week.
-# expected_values    : the full set of dimension values the dashboard must have.
-#                      Missing values → DRIFT (1 missing) or FAIL (2+).
-# A value present this week that is neither in expected_values nor seen in
-# the trailing lookback_weeks weeks is reported as new/unexpected (DRIFT) —
-# confirm it's a legitimate addition (new creative, new platform, ...) before
-# adding it to expected_values.
+# completeness_check : verify all required_values appear each week.
+# required_values    : values that must be present EVERY week — a flagship
+#                      product, a core platform. Missing values → DRIFT
+#                      (1 missing) or FAIL (2+), alerted immediately.
+#                      (expected_values is accepted as a legacy alias.)
+# optional_values    : legitimate values that are allowed to be absent some
+#                      weeks — event-driven segments (annual conference),
+#                      seasonal campaigns. Absence is never flagged; presence
+#                      is recognized as known (not "new/unexpected").
+# Classify by asking "what does absence MEAN?": pipeline failure → required;
+# normal business quiet period → optional. Confirm against real history
+# (does it appear every period?) and the glossary/data steward, not just
+# one screenshot.
+# A value present this week that is in neither list nor seen in the trailing
+# lookback_weeks weeks is reported as new/unexpected (DRIFT) — confirm it's
+# a legitimate addition (new creative, new platform, ...) before adding it
+# to one of the lists.
 # ─────────────────────────────────────────────────────────────────────────────
 dimensions:
 
   - name: <dimension_column>
-    completeness_check: false   # set true once expected_values is confirmed complete
-    expected_values: []
+    completeness_check: false   # set true once required_values is confirmed complete
+    required_values: []
+    optional_values: []
 
 # ── Check Configuration ─────────────────────────────────────────────────────
 checks:
@@ -82,7 +93,14 @@ checks:
 
   parts_sum:
     enabled: true
-    pivot_column: <dimension_column>
+    # pivot_columns : one parts_sum check runs per column listed here, per
+    # reconciled metric. Useful whenever the dashboard has more than one
+    # meaningful way to slice totals (e.g. by segment AND by a Paid/Organic
+    # pillar split) — a mislabeling bug that shifts rows from one value to
+    # another within a column leaves the grand total untouched, so only a
+    # breakdown check on THAT specific column will catch it.
+    pivot_columns: [<dimension_column>]
+    # pivot_column: <dimension_column>   # old single-column form, still supported
 
   trend_sanity:
     enabled: true
@@ -90,3 +108,26 @@ checks:
 
   completeness:
     enabled: true
+
+  # sanity_range : flags any row where a logically-impossible condition is
+  # true — e.g. a negative spend, or clicks exceeding interactions. Unlike
+  # every other check, this needs no source_table comparison, so it catches
+  # a bug that corrupts dashboard_table on its own — including the case
+  # where the SAME bug corrupted source_table identically (reconciliation
+  # would still PASS, since the two tables would still agree with each
+  # other while both are wrong). Especially worth adding when the dashboard
+  # shows any derived ratio (CTR, EIR, CPM, ...) — that's evidence some
+  # calculation happens after the source table, which is exactly where this
+  # kind of corruption gets introduced.
+  # Each rule's expression describes the INVALID state — a single matching
+  # row is a bug, not noise, so there's no tolerance/DRIFT tier: 0 violations
+  # = PASS, any violation = FAIL.
+  # sanity_range:
+  #   enabled: true
+  #   rules:
+  #     - name: spend_non_negative
+  #       expression: "spend < 0"
+  #     - name: clicks_le_interactions
+  #       expression: "<clicks_column> > <interactions_column>"
+  #     - name: eir_within_100pct
+  #       expression: "engagements > interactions"   # EIR = engagements/interactions can't exceed 100%

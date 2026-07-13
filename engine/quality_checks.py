@@ -14,6 +14,13 @@ trend_sanity   — current week vs. the average of the trailing lookback_weeks
 completeness   — no expected dimension slice is silently missing, and any
                  slice not seen anywhere in the lookback window is flagged
                  as a new/unexpected value instead of being ignored
+sanity_range   — no row violates a logically-impossible business rule
+                 (spend < 0, clicks > interactions, ...). Unlike every other
+                 check here, this needs no source-table comparison — it
+                 catches a bug that corrupts dashboard_table on its own,
+                 including the case where the same bug also corrupted
+                 source_table identically (reconciliation would still PASS,
+                 since the two tables would still agree with each other)
 """
 
 from dataclasses import dataclass
@@ -292,14 +299,22 @@ def run_completeness_check(
     run_week: str,
     prev_weeks: Optional[List[str]] = None,
     date_column: str = "fiscal_yr_and_wk_desc",
+    optional_values: Optional[List[str]] = None,
 ) -> CheckResult:
     """Every value in expected_values must appear in the current week's data.
 
+    optional_values are legitimate, recognized values that are allowed to be
+    absent in any given week (event-driven segments, seasonal campaigns, ...).
+    Their absence is never flagged, but their presence is treated as known —
+    so they don't trip the new/unexpected-value detection either. Absence
+    alerting stays immediate for expected_values; only genuinely sporadic
+    values belong in optional_values.
+
     If prev_weeks is given, any current-week value that is neither an
-    expected_value nor seen anywhere in that lookback window is reported as
-    a new/unexpected value — a signal for a human to confirm it's a
-    legitimate addition (new creative, new platform, ...) rather than a data
-    bug, without failing the check outright.
+    expected_value, an optional_value, nor seen anywhere in that lookback
+    window is reported as a new/unexpected value — a signal for a human to
+    confirm it's a legitimate addition (new creative, new platform, ...)
+    rather than a data bug, without failing the check outright.
     """
     present_rows = spark.sql(f"""
         SELECT DISTINCT {dimension}
@@ -318,7 +333,11 @@ def run_completeness_check(
             FROM {dashboard_table}
             WHERE {date_column} IN ({week_list}) AND {_NON_BUDGET}
         """).collect()
-        known = set(expected_values) | {r[dimension] for r in historical_rows}
+        known = (
+            set(expected_values)
+            | set(optional_values or [])
+            | {r[dimension] for r in historical_rows}
+        )
         new_values = sorted(v for v in present if v not in known)
 
     if not missing:
@@ -351,4 +370,62 @@ def run_completeness_check(
         expected=len(expected_values),
         actual=len(present),
         detail="  |  ".join(detail_parts),
+    )
+
+
+def run_sanity_range_check(
+    spark,
+    dashboard_table: str,
+    rule_name: str,
+    invalid_condition: str,
+    run_week: str,
+    date_column: str = "fiscal_yr_and_wk_desc",
+) -> CheckResult:
+    """Flag any row where invalid_condition is true for the current week.
+
+    invalid_condition describes a logically-impossible state, not a
+    tolerance comparison — e.g. "spend < 0" or "link_clicks > interactions".
+    A single matching row is a bug, not noise, so this has no DRIFT tier
+    the way tolerance-based checks do: zero violations is PASS, any
+    violation is FAIL.
+
+    Needs no source_table — it validates dashboard_table against a rule
+    that must hold regardless of what any other table says, which is what
+    lets it catch a bug that corrupted both tables identically (a case
+    reconciliation and parts_sum cannot see, since they only check that the
+    two tables agree with each other, not that either one is sane on its
+    own).
+    """
+    row = spark.sql(f"""
+        SELECT COUNT(*) AS total,
+               SUM(CASE WHEN {invalid_condition} THEN 1 ELSE 0 END) AS violations
+        FROM {dashboard_table}
+        WHERE {date_column} = '{run_week}' AND {_NON_BUDGET}
+    """).collect()[0]
+    total = row["total"] or 0
+    violations = row["violations"] or 0
+
+    if total == 0:
+        return CheckResult(
+            check_name="sanity_range",
+            metric=rule_name,
+            status=Status.PASS,
+            expected=0,
+            actual=0,
+            detail=f"No rows for {run_week} — sanity check skipped",
+        )
+
+    status = Status.PASS if violations == 0 else Status.FAIL
+
+    return CheckResult(
+        check_name="sanity_range",
+        metric=rule_name,
+        status=status,
+        expected=0,
+        actual=violations,
+        detail=(
+            f"All {total} rows satisfy rule '{rule_name}'"
+            if violations == 0
+            else f"{violations} of {total} rows violate rule '{rule_name}' ({invalid_condition})"
+        ),
     )

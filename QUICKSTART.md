@@ -98,10 +98,11 @@ metrics:
 dimensions:
   - name: platform             # replace with your breakdown dimension column
     completeness_check: true
-    expected_values:           # list values that MUST appear every period
+    required_values:           # values that MUST appear every period — missing = alert
       - LinkedIn
       - Instagram
       - Facebook
+    optional_values: []        # legitimately sporadic values — absence is normal, never flagged
 # ── Leave everything else as-is ──────────────────────────────────
 ```
 

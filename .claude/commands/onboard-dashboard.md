@@ -58,6 +58,37 @@ information you can without asking. Work through this checklist silently:
   - Data scale: millions → likely bigint; percentages → likely decimal; currency → likely decimal(18,2)
   - Volatility: stable week-to-week (spend, users) or volatile (video_views, shares)
 
+**Sanity-range candidates** (logically-impossible states — for `sanity_range`)
+- Look for two kinds of relationships between the metrics you just extracted:
+  1. **Parent/component** — a metric that is visibly a sub-total or component
+     of a larger metric (e.g. a breakdown table showing Clicks, Comments,
+     Likes, Shares, Video Views all rolling up into a total Interactions
+     column; a computed rate like EIR = Engagements ÷ Interactions implies
+     Engagements can never exceed Interactions). Any such pair is a
+     candidate rule: `component_column > parent_column` describes an
+     impossible state.
+  2. **Sign-bound metrics** — currency/spend metrics can never be negative
+     (`spend < 0` is always a valid rule for any monetary column); count
+     metrics (impressions, users, clicks) likewise can never be negative.
+  - You can auto-propose these with high confidence WITHOUT asking — verify
+    each candidate rule against every historical row/period visible in the
+    export before including it (e.g. check the rule holds across all
+    quarters in a Deep-dive/history table), the same way you'd verify a
+    `required_values` classification. Never write a sanity rule you haven't
+    checked against the actual numbers in the export.
+  - Only escalate to Phase 3 if a suspected parent/component relationship is
+    ambiguous — e.g. two metrics that seem related but the export doesn't
+    clearly show one rolling up into the other, or a metric whose
+    definition could plausibly allow the "impossible" state in this
+    specific business (ask rather than assume).
+  - This check only pays for itself when the dashboard shows evidence of
+    calculation happening downstream of the raw source (derived ratios like
+    EIR/CTR/CPM, or a rolled-up total that doesn't exist as a raw column
+    anywhere upstream) — if you don't see any derived/calculated metric on
+    the dashboard, note in Phase 3 that `sanity_range` may not be worth
+    enabling for this one, rather than proposing rules with no real
+    justification.
+
 **Dimensions** (what it breaks down by)
 - Look for: filter panels, slicer dropdowns, chart legends, axis breakdown labels,
   table row groupings.
@@ -72,9 +103,25 @@ information you can without asking. Work through this checklist silently:
   - **Unexpected / new this week** — a value that appears in only the most
     recent week of a trend chart and nowhere in earlier weeks, or that you
     otherwise can't confirm has existed before. Don't silently fold these
-    into `expected_values` — a real new campaign/creative/platform looks
-    identical, in a single screenshot, to a data glitch. Call it out in
+    into the dimension's value lists — a real new campaign/creative/platform
+    looks identical, in a single screenshot, to a data glitch. Call it out in
     Phase 3 and let the user say which it is.
+- Then sub-classify the **Expected** bucket into required vs. optional using
+  the "what does absence mean?" test — this drives `required_values` vs.
+  `optional_values` in the YAML:
+  - **Required** (absence = pipeline problem, alert immediately): flagship
+    products, core platforms, anything present in every period of whatever
+    history the export shows. If it vanished, someone should be paged.
+  - **Optional** (absence = normal business quiet, stay silent): event-driven
+    values (annual conferences, seasonal campaigns), near-zero-volume slices
+    that plausibly post sporadically, values missing from some quarters of
+    the export's own history. If it vanished for a month, nobody should care.
+  - Signals to use: presence across every period vs. only some; volume (a
+    slice at ~0 in the export may not appear weekly); business meaning of
+    the name (a conference name → seasonal; a flagship product → permanent).
+  - Values that fit *neither* cleanly (e.g. an "NA"/unmapped bucket — is a
+    steady trickle normal, or is it a fading artifact?) go to Phase 3 as an
+    explicit question, not into either list by default.
 
 **Derived / aiding columns** (calculated, not raw)
 - Look for: ratio metrics that are visibly computed from two other metrics
@@ -116,12 +163,15 @@ information you can without asking. Work through this checklist silently:
   - **Source system per dimension or metric**, and any cutover language
     ("Live API replacing X from week YYYY-WW", "sole source until...",
     "agency A handed off to agency B from week YYYY-WW"). A source migration
-    near the current date means an `expected_values` list built from a single
+    near the current date means a `required_values` list built from a single
     screenshot will likely go stale within weeks.
   - **Values that are winding down or already at zero** ("Zero X posts from
     week YYYY-WW onward", "wound down by week YYYY-WW"). These must not go
-    into `expected_values` with `completeness_check: true`, or the check will
-    fail permanently once that value stops appearing.
+    into `required_values` with `completeness_check: true`, or the check will
+    fail permanently once that value stops appearing — and they don't belong
+    in `optional_values` either (that list is for values that come and go,
+    not values that are gone for good). Exclude them entirely with a comment
+    citing the glossary note.
   - **Business definitions** that resolve ambiguous metric/dimension names
     (e.g. two similar-looking click columns that are actually different things).
   - **Refresh cadence** (day/time) — feeds the `freshness` check's mental model.
@@ -139,9 +189,9 @@ information you can without asking. Work through this checklist silently:
 - Sometimes unknown: `date_column` exact name if format is ambiguous
 - **If no glossary/data-dictionary page was included in what the user shared**:
   treat "does one exist, and can you share it" as its own unknown — don't
-  silently skip it. A missing glossary means every `expected_values` list you
-  build is a guess with no visibility into source migrations; say so explicitly
-  when you ask (see Phase 3).
+  silently skip it. A missing glossary means every `required_values` /
+  `optional_values` list you build is a guess with no visibility into source
+  migrations; say so explicitly when you ask (see Phase 3).
 
 ---
 
@@ -160,11 +210,21 @@ Format it like this:
 - **Derived / aiding columns** (documented only, not directly checked — see
   above): [list, or "none spotted" if there weren't any calculated ratios
   or glossary formulas]
-- **Dimensions — expected values** (used for completeness checks): [list per
-  dimension]
+- **Dimensions — required values** (must appear every week; absence alerts
+  immediately): [list per dimension, with a one-clause reason like "present
+  in every quarter of the export's history"]
+- **Dimensions — optional values** (legitimately sporadic; absence is normal
+  and silent): [list per dimension with the reason, e.g. "annual conference",
+  "near-zero volume" — or "none" if every value looked permanent]
+- **Dimensions — unclear** (fits neither bucket cleanly, e.g. an
+  "NA"/unmapped slice): [list, or omit this line if none]
 - **Dimensions — unexpected / new this week** (seen in the screenshot but
   not confirmed as an established value): [list, or "none" if everything
   looked established]
+- **Sanity-range rules** (logically-impossible states, verified against
+  every period in the export): [list each as "X can never exceed Y" /
+  "X can never be negative", or "none proposed — no derived/rolled-up
+  metrics spotted on this dashboard" if it doesn't apply]
 - Date: [granularity and inferred column name]
 - [any row exclusions you spotted]
 - [any glossary notes on source-system migrations or values winding down —
@@ -194,23 +254,41 @@ Format it like this:
 5. **[Only if uncertain]** Exact DB column names for: [list ambiguous metrics]
    *(Run `DESCRIBE TABLE your_source_table` to get the exact column list)*
 
-6. **[Only if dimension values were truncated in screenshot]**
+6. **Required vs. optional split** — I classified the dimension values above
+   into required (absence = alert) and optional (absence = normal) from the
+   export alone, which is an inference, not ground truth. Does the split look
+   right? In particular: [name the values you're least sure about, and any
+   "unclear" ones like an NA/unmapped bucket — for those ask directly: is a
+   steady trickle of this value normal every week (→ required), or is it a
+   fading artifact (→ leave it out entirely)?] The safest way to verify is
+   one query against real history:
+   *(`SELECT [dimension], [period], COUNT(*) FROM [source_table] GROUP BY 1, 2 ORDER BY 1, 2`
+   — anything present in every period belongs in required_values)*
+
+7. **[Only if dimension values were truncated in screenshot]**
    Are there more [platform/region/etc.] values beyond [what you saw]?
    Should all of them always be present each week, or are some optional?
 
-7. **[Only if any dimension values landed in "unexpected / new this week"]**
+8. **[Only if any dimension values landed in "unexpected / new this week"]**
    For each one: is this a legitimate new addition (new creative, new
-   platform, new campaign) that should be added to `expected_values` going
-   forward, or does it look like a data issue that shouldn't be there at
-   all? I'll add confirmed-legitimate values to `expected_values`; anything
-   you're unsure about stays out of `expected_values` so the lookback-window
-   new-value check keeps watching it.
+   platform, new campaign) that should be added to `required_values` or
+   `optional_values` going forward, or does it look like a data issue that
+   shouldn't be there at all? I'll add confirmed-legitimate values to the
+   appropriate list; anything you're unsure about stays out of both lists so
+   the lookback-window new-value check keeps watching it.
 
-8. **[Only if no row exclusion was visible]**
+9. **[Only if a sanity-range candidate was ambiguous]** For each unclear
+   parent/component relationship: does [component metric] genuinely always
+   fit within [parent metric] in this business, or can it legitimately
+   exceed it (e.g. counted through a different event path)? I'll only add
+   confirmed relationships as `sanity_range` rules — an unconfirmed one
+   risks a false alarm on data that's actually fine.
+
+10. **[Only if no row exclusion was visible]**
    Does your source table include any rows that should NOT appear in the dashboard?
    *(e.g. Budget rows, Test accounts, Draft records — these need a WHERE clause in the checks)*
 
-9. **[Only if no glossary/data-dictionary page was included]**
+11. **[Only if no glossary/data-dictionary page was included]**
    Is there a glossary or data dictionary for this dashboard — something that maps
    each field to its source system and business definition? If so, please share it
    too. Without it, dimension completeness lists are a guess: source-system
@@ -258,13 +336,26 @@ Once you have all the information, generate the complete YAML registry.
   `checks` — the engine doesn't validate this section; it's documentation.
 
 **Dimensions section**
-- Only include a dimension value in `expected_values` if you are confident
-  it appears EVERY period (not just sometimes) — this applies to values
-  from the **expected** bucket in Phase 2 only.
+- Each checked dimension gets TWO value lists (from the Phase 2 sub-classification,
+  corrected by the user's Phase 3 answer):
+  - `required_values` — must appear every week; a missing value alerts
+    immediately (DRIFT for 1 missing, FAIL for 2+). Only put a value here if
+    you are confident it appears EVERY period (not just sometimes) AND its
+    absence would mean a pipeline problem, not a business quiet spell.
+  - `optional_values` — legitimately sporadic values (event-driven segments,
+    seasonal campaigns, near-zero-volume slices). Absence is never flagged;
+    presence is recognized as known, so it's never reported as "new" either.
+    Give each optional value a one-clause reason in a YAML comment (e.g.
+    `# annual conference — quiet outside its season`).
+  - A value the user couldn't classify (the "unclear" bucket, e.g. an
+    NA/unmapped slice) goes in NEITHER list, with a `# VERIFY` comment
+    stating the open question — while unlisted, the lookback new-value
+    check keeps watching it.
 - Values from the **unexpected / new this week** bucket never go straight
-  into `expected_values`. Handle them per the user's Phase 3 answer:
-  - Confirmed legitimate → add to `expected_values` like any other value.
-  - Confirmed a data issue, or user unsure → leave out of `expected_values`
+  into either list. Handle them per the user's Phase 3 answer:
+  - Confirmed legitimate → add to `required_values` or `optional_values`
+    per how the user says it behaves.
+  - Confirmed a data issue, or user unsure → leave out of both lists
     entirely, and add a `# VERIFY` comment naming it explicitly (e.g.
     `# VERIFY: "Threads" appeared 2026-W27 only — confirm before adding`).
     Leaving it out is what lets the lookback-window new-value check keep
@@ -302,9 +393,26 @@ Once you have all the information, generate the complete YAML registry.
   needed, the user will need to update quality_checks.py — flag this in the YAML as a comment.
 
 **Checks section**
-- Enable all 5 checks by default
-- Set `parts_sum.pivot_column` to the primary breakdown dimension
-  (the one with the most visible slices in the screenshot)
+- Enable freshness, reconciliation, parts_sum, trend_sanity, and completeness
+  by default. Enable `sanity_range` only if you proposed at least one rule in
+  Phase 2/3 — if the dashboard showed no derived/rolled-up metrics, omit the
+  section entirely rather than enabling it with an empty rule list.
+- Every `sanity_range` rule must be one you verified against the export's own
+  historical rows (see Phase 2) — never write a rule you haven't checked
+  against real numbers, and never include one the user flagged as
+  unconfirmed in Phase 3.
+- Set `parts_sum.pivot_columns` (a list) to every dimension whose breakdown
+  the dashboard is genuinely built around — one parts_sum check runs per
+  column, per reconciled metric:
+  - Always include the primary breakdown dimension (the one with the most
+    visible slices in the screenshot).
+  - Also include any dimension that gets its own dedicated page/view or
+    high-level split (e.g. a Paid/Organic pillar with separate report pages).
+    A mislabeling bug that shifts rows between two values of a column leaves
+    the grand total AND every other column's breakdown untouched — only a
+    parts_sum on that specific column catches it.
+  - Don't list every dimension — each extra column adds one query per metric
+    per week. Two or three well-chosen columns is the normal range.
 - Set `trend_sanity.max_wow_change_pct`:
   - Stable dashboards: `30.0`
   - Normal dashboards: `50.0`
@@ -341,7 +449,10 @@ metrics:
 #   [one entry per calculated ratio / glossary formula, informational only]
 
 dimensions:
-  [one entry per dimension with completeness_check: true]
+  [one entry per dimension with completeness_check: true, each with
+   required_values (must appear every week) and optional_values
+   (legitimately sporadic — absence never flagged), plus # VERIFY
+   comments for anything classified from the export alone]
 
 checks:
   freshness:
@@ -352,7 +463,8 @@ checks:
 
   parts_sum:
     enabled: true
-    pivot_column: [primary dimension column]
+    pivot_columns: [primary dimension column, plus any dimension with its
+                    own dedicated page/high-level split — usually 2-3 total]
 
   trend_sanity:
     enabled: true
@@ -360,6 +472,13 @@ checks:
 
   completeness:
     enabled: true
+
+# sanity_range:                    # omit this whole section if Phase 2 found no candidates
+#   enabled: true
+#   rules:
+#     [one entry per verified logically-impossible condition:
+#      - name: <label>
+#        expression: "<raw SQL boolean, e.g. component_column > parent_column, or metric < 0>"]
 ```
 
 ---
@@ -438,15 +557,17 @@ Once the user approves (even partially — they can say "save it, I'll fix the V
    | `[column]` | `[formula]` |
 
    ## Dimensions & expected values
-   | Dimension | Expected values | Completeness checked? |
-   |---|---|---|
-   | `[column]` | [Value1, Value2, ...] | Yes / No — [reason if No] |
+   Required = must appear every week, absence alerts immediately.
+   Optional = legitimately sporadic, absence is normal and silent.
+   | Dimension | Required (alert if missing) | Optional (absence is normal) | Completeness checked? |
+   |---|---|---|---|
+   | `[column]` | [Value1, Value2, ...] | [Value3 (reason), ...] or — | Yes / No — [reason if No] |
 
    ## New / unexpected values flagged for review
    <!-- omit this whole section if none were flagged -->
    - `[dimension]`: "[value]" — seen this week only; not yet in
-     expected_values. [what the user said in Phase 3, or "awaiting
-     confirmation" if still open]
+     required_values or optional_values. [what the user said in Phase 3,
+     or "awaiting confirmation" if still open]
 
    ## Lookback window
    `lookback_weeks: [N]` — [one sentence, same explanation given in Phase 5]
@@ -456,9 +577,10 @@ Once the user approves (even partially — they can say "save it, I'll fix the V
    |---|---|
    | freshness | Fails if the latest week in the dashboard isn't the run week |
    | reconciliation | Dashboard totals must match source totals within tolerance, per metric |
-   | parts_sum | Per-`[pivot_column]` subtotals must reconcile |
+   | parts_sum | Subtotals must reconcile per each of: `[pivot_columns list]` — one independent check per column, so a mislabeling bug that leaves the grand total untouched is still caught on the breakdown it distorts |
    | trend_sanity | Change vs. the `[N]`-week average must stay within ±`[max_wow_change_pct]`% |
-   | completeness | All expected `[dimension]` values must appear; new ones get flagged |
+   | completeness | All required `[dimension]` values must appear; optional values may be absent; new/unknown ones get flagged |
+   | sanity_range | Flags any row violating: `[list each rule in plain English, e.g. "clicks can never exceed interactions"]` — needs no source-table comparison, so it catches a bug that corrupts both tables identically <!-- omit this row entirely if sanity_range wasn't enabled --> |
 
    ## Still needs verification before committing
    <!-- omit this whole section if there are no # VERIFY items -->
@@ -496,25 +618,37 @@ Once the user approves (even partially — they can say "save it, I'll fix the V
 ## Hard rules (never break these)
 
 - **Never fabricate a table name.** If the user has not confirmed it, mark it `# VERIFY`.
-- **Never add a metric to expected_values for dimensions.** Dimension values are strings; metrics are numbers.
+- **Never add a metric to required_values/optional_values for dimensions.** Dimension values are strings; metrics are numbers.
 - **Never add a metric you cannot confirm exists** in both dashboard table AND source table.
 - **Never ask one question at a time.** Batch all unknowns into Phase 3.
 - **Never set tolerance below 0.1%** without the user explicitly requesting it.
 - **Never skip the local test** after saving the file.
 - **Never commit the file yourself** — always remind the user that committing is their responsibility (human-approval step).
 - **Never treat "no glossary was shared" as "no glossary exists."** Ask for it
-  (Phase 3, item 9). If the user confirms none exists, proceed with
+  (Phase 3, item 10). If the user confirms none exists, proceed with
   `completeness_check: false` on every dimension you're not personally
   confident about, rather than guessing a static list.
 - **Never put a derived/calculated ratio in `metrics`.** Visit rate, cost-per-X,
   CPM/CPV, ROMs, and glossary multipliers go in `derived_metrics` (documentation
   only) — reconciling a ratio against a source table's ratio is not meaningful.
 - **Never fold a value from the "unexpected / new this week" bucket into
-  `expected_values` without the user confirming it in Phase 3.** A single
-  screenshot can't distinguish a legitimate new creative/platform from a
-  data glitch — that's the user's call, not a guess to make silently.
+  `required_values` or `optional_values` without the user confirming it in
+  Phase 3.** A single screenshot can't distinguish a legitimate new
+  creative/platform from a data glitch — that's the user's call, not a guess
+  to make silently.
+- **Never put a value in `required_values` on volume alone.** The test is
+  "what does absence mean?" — pipeline failure → required; normal business
+  quiet (event/seasonal segment) → optional; unclassifiable (e.g. an
+  NA/unmapped bucket) → neither list, ask in Phase 3. A wrong "required"
+  call means a false alarm every week the value is legitimately quiet.
 - **Never skip generating the validation summary `.md`.** It's the artifact
   a non-technical reviewer actually reads before approving the commit —
   treat it as required output, not optional documentation.
 - **Never tell the user to commit the raw PDF/screenshot from `onboarding/`.**
   Only the registry YAML and the validation summary belong in git.
+- **Never write a `sanity_range` rule you haven't verified against the
+  export's own historical numbers.** A guessed parent/component
+  relationship that's actually wrong produces a false FAIL on perfectly
+  healthy data — worse than not having the check at all, since
+  `sanity_range` has no tolerance/DRIFT tier to absorb a wrong assumption.
+  If a relationship is ambiguous, ask in Phase 3 instead of including it.

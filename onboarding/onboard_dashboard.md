@@ -175,10 +175,10 @@ video_views, 50% or higher is reasonable.
   useful if one week is naturally noisy and you don't want it to become
   next week's misleading baseline.
 - `completeness` only flags a dimension value as new/unexpected if it's
-  absent from `expected_values` **and** from all of the trailing
-  `lookback_weeks` weeks. This surfaces genuinely new values (new creative,
-  new platform) as DRIFT for review, without flagging values that just
-  rotate in and out week to week.
+  absent from `required_values` and `optional_values` **and** from all of
+  the trailing `lookback_weeks` weeks. This surfaces genuinely new values
+  (new creative, new platform) as DRIFT for review, without flagging values
+  that just rotate in and out week to week.
 
 ```yaml
 lookback_weeks: 4
